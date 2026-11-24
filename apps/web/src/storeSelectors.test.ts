@@ -19,6 +19,7 @@ import {
   createThreadProjectIdSelector,
   createThreadShellSettingsSelector,
   createThreadShellsSelector,
+  collectWorktreePathOwnership,
   createThreadWorkspaceMetadataSelector,
   isSidebarThreadVisible,
 } from "./storeSelectors";
@@ -763,5 +764,35 @@ describe("createSidechatSummariesForGitHubItemSelector", () => {
       number: 7,
     });
     expect(select(state).map((thread) => thread.id)).toEqual([newer.id, older.id]);
+  });
+});
+
+describe("collectWorktreePathOwnership", () => {
+  it("splits live and archived owners and lets a live owner win", () => {
+    const ownership = collectWorktreePathOwnership([
+      { worktreePath: "/wt/live", associatedWorktreePath: null, archivedAt: null },
+      { worktreePath: "/wt/shared", associatedWorktreePath: null, archivedAt: null },
+      {
+        worktreePath: "/wt/archived",
+        associatedWorktreePath: "/wt/also-archived",
+        archivedAt: "2026-11-01T00:00:00.000Z",
+      },
+      {
+        worktreePath: "/wt/shared",
+        associatedWorktreePath: null,
+        archivedAt: "2026-10-01T00:00:00.000Z",
+      },
+      { worktreePath: null, associatedWorktreePath: null, archivedAt: null },
+    ]);
+
+    expect([...ownership.active].toSorted()).toEqual(["/wt/live", "/wt/shared"]);
+    expect([...ownership.archived].toSorted()).toEqual(["/wt/also-archived", "/wt/archived"]);
+  });
+
+  it("returns empty sets for a host with no threads", () => {
+    expect(collectWorktreePathOwnership([])).toEqual({
+      active: new Set(),
+      archived: new Set(),
+    });
   });
 });

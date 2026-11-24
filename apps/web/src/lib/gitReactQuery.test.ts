@@ -1,6 +1,8 @@
 import { MutationObserver, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_GIT_COMMIT_HISTORY_LIMIT } from "@synara/contracts";
+
 const { readWorkingTreeDiff, createDetachedWorktree } = vi.hoisted(() => ({
   readWorkingTreeDiff: vi.fn(async (input: { filePath?: string }) => ({
     patch: input.filePath ?? "all",
@@ -29,6 +31,7 @@ import {
   refreshGitWorkingTreeDiffsForCwd,
   refreshLocalGitQueriesForCwdsAfterActivity,
   refreshGitAfterFileWrite,
+  gitCommitHistoryQueryOptions,
 } from "./gitReactQuery";
 
 function deferredVoid() {
@@ -57,6 +60,48 @@ describe("file-scoped working tree diffs", () => {
       scope: "workingTree",
       filePath: "src/a.ts",
     });
+  });
+});
+
+const historyPage = (commitCount: number, hasMore: boolean) => ({
+  commits: Array.from({ length: commitCount }, (_, index) => ({
+    sha: String(index),
+    shortSha: String(index),
+    parents: [],
+    subject: "subject",
+    authorName: "Ada",
+    authorEmail: "ada@example.com",
+    committedAt: "2025-01-02T03:04:05+02:00",
+    refs: [],
+  })),
+  hasMore,
+});
+
+describe("commit history paging", () => {
+  it("derives the next offset from the commits actually received", () => {
+    const options = gitCommitHistoryQueryOptions({ cwd: "/repo", ref: null, limit: 100 });
+    const getNextPageParam = options.getNextPageParam!;
+
+    // A truncated server page returns fewer records than the limit while still
+    // reporting hasMore, so the next skip must count what was received.
+    expect(getNextPageParam(historyPage(10, true), [historyPage(10, true)], 0, [0])).toBe(10);
+    expect(getNextPageParam(historyPage(100, true), [historyPage(100, true)], 0, [0])).toBe(100);
+    expect(
+      getNextPageParam(
+        historyPage(7, true),
+        [historyPage(10, true), historyPage(7, true)],
+        10,
+        [0, 10],
+      ),
+    ).toBe(17);
+    expect(
+      getNextPageParam(
+        historyPage(5, false),
+        [historyPage(10, true), historyPage(5, false)],
+        10,
+        [0, 10],
+      ),
+    ).toBeUndefined();
   });
 });
 
@@ -144,6 +189,85 @@ describe("git mutation options", () => {
     statusGate.resolve();
     await vi.waitFor(() => expect(queryClient.getQueryState(statusKey)?.fetchStatus).toBe("idle"));
     unsubscribe();
+  });
+});
+
+const historyStatusSnapshot = (overrides: Partial<Record<string, unknown>> = {}) => ({
+  branch: "main",
+  hasUpstream: true,
+  upstreamBranch: "origin/main",
+  aheadCount: 0,
+  behindCount: 0,
+  ...overrides,
+});
+
+describe("commit history refresh gating", () => {
+  const historyKey = (cwd: string) =>
+    gitQueryKeys.commitHistory(cwd, null, DEFAULT_GIT_COMMIT_HISTORY_LIMIT);
+  // An active history query whose reads are counted; staleTime keeps every read
+  // explicit so a count of 1 means nothing re-read it.
+  const observeHistory = (queryClient: QueryClient, cwd: string) => {
+    let calls = 0;
+    const observer = new QueryObserver(queryClient, {
+      queryKey: historyKey(cwd),
+      queryFn: async () => {
+        calls += 1;
+        return { commits: [], hasMore: false };
+      },
+      staleTime: Number.POSITIVE_INFINITY,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    return { calls: () => calls, unsubscribe };
+  };
+
+  it("skips re-reading history while agent activity leaves the branch alone", async () => {
+    const queryClient = new QueryClient();
+    const cwd = "/repo/quiet";
+    queryClient.setQueryData(gitQueryKeys.status(cwd), historyStatusSnapshot());
+    const history = observeHistory(queryClient, cwd);
+    await vi.waitFor(() => expect(history.calls()).toBe(1));
+
+    // The first refresh has no earlier snapshot to compare against, so it reads once
+    // and records the state; the next refresh has nothing new to find.
+    await refreshGitQueriesForCwd(queryClient, cwd, "active-details", "local");
+    const afterSnapshot = history.calls();
+    await refreshGitQueriesForCwd(queryClient, cwd, "active-details", "local");
+
+    expect(history.calls()).toBe(afterSnapshot);
+    // Stale either way, so the next focus or remount still re-reads it.
+    expect(queryClient.getQueryState(historyKey(cwd))?.isInvalidated).toBe(true);
+    history.unsubscribe();
+  });
+
+  it("re-reads history once the branch moves", async () => {
+    const queryClient = new QueryClient();
+    const cwd = "/repo/committed";
+    queryClient.setQueryData(gitQueryKeys.status(cwd), historyStatusSnapshot());
+    const history = observeHistory(queryClient, cwd);
+    await vi.waitFor(() => expect(history.calls()).toBe(1));
+    await refreshGitQueriesForCwd(queryClient, cwd, "active-details", "local");
+    const afterSnapshot = history.calls();
+
+    queryClient.setQueryData(gitQueryKeys.status(cwd), historyStatusSnapshot({ aheadCount: 1 }));
+    await refreshGitQueriesForCwd(queryClient, cwd, "active-details", "local");
+
+    expect(history.calls()).toBe(afterSnapshot + 1);
+    history.unsubscribe();
+  });
+
+  it("re-reads history for a mutation-driven refresh even when nothing moved", async () => {
+    const queryClient = new QueryClient();
+    const cwd = "/repo/mutated";
+    queryClient.setQueryData(gitQueryKeys.status(cwd), historyStatusSnapshot());
+    const history = observeHistory(queryClient, cwd);
+    await vi.waitFor(() => expect(history.calls()).toBe(1));
+    await refreshGitQueriesForCwd(queryClient, cwd, "active-details", "local");
+    const afterSnapshot = history.calls();
+
+    await invalidateGitQueriesForCwds(queryClient, [cwd]);
+
+    expect(history.calls()).toBe(afterSnapshot + 1);
+    history.unsubscribe();
   });
 });
 

@@ -776,3 +776,62 @@ export function createFirstProjectSelector(): (state: AppState) => Project | und
     return previousFirstProject;
   };
 }
+
+/** Worktree paths split by the state of the threads that own them. */
+export interface WorktreePathOwnership {
+  readonly active: ReadonlySet<string>;
+  readonly archived: ReadonlySet<string>;
+}
+
+export const EMPTY_WORKTREE_PATH_OWNERSHIP: WorktreePathOwnership = Object.freeze({
+  active: new Set<string>(),
+  archived: new Set<string>(),
+});
+
+/**
+ * Worktree paths owned by live versus archived threads. The Git Graph worktree
+ * picker uses this to hide archived worktrees by default without pulling the full
+ * thread read model into the pane: the lightweight shell carries both fields.
+ */
+export function collectWorktreePathOwnership(
+  shells: ReadonlyArray<
+    Pick<ThreadShell, "worktreePath" | "associatedWorktreePath" | "archivedAt">
+  >,
+): WorktreePathOwnership {
+  const active = new Set<string>();
+  const archived = new Set<string>();
+  for (const shell of shells) {
+    const archivedThread = shell.archivedAt != null;
+    for (const path of [shell.worktreePath, shell.associatedWorktreePath]) {
+      if (!path) continue;
+      if (archivedThread) archived.add(path);
+      else active.add(path);
+    }
+  }
+  for (const path of active) archived.delete(path);
+  return { active, archived };
+}
+
+/** Stable selector over the lightweight thread shells, recomputed on shell deltas only. */
+export function createWorktreePathOwnershipSelector(): (state: AppState) => WorktreePathOwnership {
+  let previousShells: AppState["threadShellById"] | undefined;
+  let previousThreadIds: AppState["threadIds"] | undefined;
+  let previous: WorktreePathOwnership = EMPTY_WORKTREE_PATH_OWNERSHIP;
+
+  return (state) => {
+    const threadIds = state.threadIds ?? [];
+    const shellsById = state.threadShellById ?? {};
+    if (shellsById === previousShells && threadIds === previousThreadIds) {
+      return previous;
+    }
+    previousShells = shellsById;
+    previousThreadIds = threadIds;
+    previous = collectWorktreePathOwnership(
+      threadIds.flatMap((threadId) => {
+        const shell = shellsById[threadId];
+        return shell ? [shell] : [];
+      }),
+    );
+    return previous;
+  };
+}

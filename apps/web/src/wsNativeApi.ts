@@ -730,6 +730,21 @@ export function createWsNativeApi(): NativeApi {
         }),
       listBranches: (input) => executionRequest(WS_METHODS.gitListBranches, input),
       listRecentCommits: (input) => executionRequest(WS_METHODS.gitListRecentCommits, input),
+      listCommitHistory: (input) => executionRequest(WS_METHODS.gitListCommitHistory, input),
+      readCommitDiff: (input) => executionRequest(WS_METHODS.gitReadCommitDiff, input),
+      checkoutCommit: (input) =>
+        executionRequest(WS_METHODS.gitCheckoutCommit, input, { timeoutMs: null }),
+      checkoutRemoteBranch: (input) =>
+        executionRequest(WS_METHODS.gitCheckoutRemoteBranch, input, { timeoutMs: null }),
+      cherryPickCommit: (input) =>
+        executionRequest(WS_METHODS.gitCherryPickCommit, input, { timeoutMs: null }),
+      revertCommit: (input) =>
+        executionRequest(WS_METHODS.gitRevertCommit, input, { timeoutMs: null }),
+      createTag: (input) => executionRequest(WS_METHODS.gitCreateTag, input),
+      deleteBranchRef: (input) =>
+        executionRequest(WS_METHODS.gitDeleteBranchRef, input, { timeoutMs: null }),
+      deleteTagRef: (input) =>
+        executionRequest(WS_METHODS.gitDeleteTagRef, input, { timeoutMs: null }),
       createWorktree: (input) => executionRequest(WS_METHODS.gitCreateWorktree, input),
       // Worktree materialization scales with checkout size; progress events
       // keep the UI honest while the stream runs, so no fixed timeout.

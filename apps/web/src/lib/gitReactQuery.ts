@@ -1,4 +1,7 @@
-import { DEFAULT_GIT_RECENT_COMMIT_LIMIT } from "@synara/contracts";
+import {
+  DEFAULT_GIT_COMMIT_HISTORY_LIMIT,
+  DEFAULT_GIT_RECENT_COMMIT_LIMIT,
+} from "@synara/contracts";
 import type {
   GitHandoffThreadInput,
   GitReadWorkingTreeDiffInput,
@@ -9,7 +12,12 @@ import type {
   ProviderStartOptions,
   ThreadId,
 } from "@synara/contracts";
-import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
+import {
+  infiniteQueryOptions,
+  mutationOptions,
+  queryOptions,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
 import { createActivityRefreshThrottle } from "./activityRefreshThrottle";
 import { EXPENSIVE_READ_RETRY_OPTIONS, isRpcCapacityExceededError } from "./expensiveReadRetry";
@@ -45,6 +53,9 @@ export const gitQueryKeys = {
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
   recentCommits: (cwd: string | null, limit: number) =>
     ["git", "recent-commits", cwd, limit] as const,
+  commitHistory: (cwd: string | null, ref: string | null, limit: number) =>
+    ["git", "commit-history", cwd, ref, limit] as const,
+  commitDiff: (cwd: string | null, sha: string | null) => ["git", "commit-diff", cwd, sha] as const,
   pullRequest: (cwd: string | null) => ["git", "pull-request", cwd] as const,
   workingTreeDiffs: (cwd: string | null) => ["git", "working-tree-diff", cwd] as const,
   workingTreeDiff: (
@@ -106,6 +117,15 @@ export const gitMutationKeys = {
   handoffThread: (cwd: string | null) => ["git", "mutation", "handoff-thread", cwd] as const,
   stageFiles: (cwd: string | null) => ["git", "mutation", "stage-files", cwd] as const,
   unstageFiles: (cwd: string | null) => ["git", "mutation", "unstage-files", cwd] as const,
+  checkoutCommit: (cwd: string | null) => ["git", "mutation", "checkout-commit", cwd] as const,
+  checkoutRemoteBranch: (cwd: string | null) =>
+    ["git", "mutation", "checkout-remote-branch", cwd] as const,
+  createBranch: (cwd: string | null) => ["git", "mutation", "create-branch", cwd] as const,
+  cherryPickCommit: (cwd: string | null) => ["git", "mutation", "cherry-pick-commit", cwd] as const,
+  revertCommit: (cwd: string | null) => ["git", "mutation", "revert-commit", cwd] as const,
+  createTag: (cwd: string | null) => ["git", "mutation", "create-tag", cwd] as const,
+  deleteBranchRef: (cwd: string | null) => ["git", "mutation", "delete-branch-ref", cwd] as const,
+  deleteTagRef: (cwd: string | null) => ["git", "mutation", "delete-tag-ref", cwd] as const,
 };
 
 type GitRefreshDepth = "availability" | "active-details";
@@ -119,6 +139,8 @@ interface ActiveGitRefresh {
   depth: GitRefreshDepth;
   /** Read when each phase starts, so a queued "local" refresh can be upgraded to "all". */
   includeRemote: boolean;
+  /** Read when the availability phase starts; upgraded by later mutation-driven calls. */
+  refetchHistory: boolean;
   started: boolean;
   /** Resolves after the availability phase (repository/status/branches). */
   availability: Promise<void>;
@@ -128,6 +150,48 @@ interface ActiveGitRefresh {
 
 const activeGitRefreshes = new WeakMap<QueryClient, Map<string, ActiveGitRefresh>>();
 const gitRefreshQueueTails = new WeakMap<QueryClient, Promise<void>>();
+/**
+ * Last availability state that can move a ref, per cwd. Commit history is the most
+ * expensive family to re-read, so an activity-driven refresh only re-walks it when
+ * one of these values changed since the previous refresh.
+ */
+const lastHistorySnapshots = new WeakMap<QueryClient, Map<string, string>>();
+
+interface GitHistorySnapshotInput {
+  branch: string | null;
+  hasUpstream: boolean;
+  upstreamBranch: string | null;
+  aheadCount: number;
+  behindCount: number;
+}
+
+function readHistorySnapshot(queryClient: QueryClient, cwd: string): string {
+  const status = queryClient.getQueryData<GitHistorySnapshotInput>(gitQueryKeys.status(cwd));
+  if (!status) return "unknown";
+  return [
+    status.branch ?? "",
+    status.hasUpstream ? "1" : "0",
+    status.upstreamBranch ?? "",
+    String(status.aheadCount),
+    String(status.behindCount),
+  ].join("\u0000");
+}
+
+function commitHistoryMightHaveMoved(
+  queryClient: QueryClient,
+  cwd: string,
+  refetchHistory: boolean,
+): boolean {
+  const snapshot = readHistorySnapshot(queryClient, cwd);
+  let snapshots = lastHistorySnapshots.get(queryClient);
+  if (!snapshots) {
+    snapshots = new Map();
+    lastHistorySnapshots.set(queryClient, snapshots);
+  }
+  const previous = snapshots.get(cwd);
+  snapshots.set(cwd, snapshot);
+  return refetchHistory || previous === undefined || previous !== snapshot;
+}
 
 function enqueueGitRefresh(queryClient: QueryClient, refresh: () => Promise<void>): Promise<void> {
   const previous = gitRefreshQueueTails.get(queryClient) ?? Promise.resolve();
@@ -185,6 +249,7 @@ async function refreshGitAvailability(
   queryClient: QueryClient,
   cwd: string,
   includeRemote: boolean,
+  refetchHistory: boolean,
 ): Promise<void> {
   await Promise.all([
     includeRemote
@@ -208,6 +273,10 @@ async function refreshGitAvailability(
       queryKey: ["git", "recent-commits", cwd] as const,
       refetchType: "none",
     }),
+    queryClient.invalidateQueries({
+      queryKey: ["git", "commit-history", cwd] as const,
+      refetchType: "none",
+    }),
   ]);
   await Promise.all([
     includeRemote
@@ -220,6 +289,19 @@ async function refreshGitAvailability(
       .findAll({ queryKey: ["git", "recent-commits", cwd] as const, type: "active" })
       .map((query) => refetchFreshGitQueries(queryClient, query.queryKey)),
   ]);
+
+  // History pages are keyed by ref and paging is offset-based, so a new commit shifts
+  // later pages: when the walk might have moved, every active page set is re-read
+  // (refetching only page 0 would leave the flattened list inconsistent). A mutation or
+  // branch action always re-reads; agent tool activity only re-reads when the branch,
+  // its upstream, or ahead/behind counts actually changed, which a file edit does not.
+  if (!commitHistoryMightHaveMoved(queryClient, cwd, refetchHistory)) return;
+  await Promise.all(
+    queryClient
+      .getQueryCache()
+      .findAll({ queryKey: ["git", "commit-history", cwd] as const, type: "active" })
+      .map((query) => refetchFreshGitQueries(queryClient, query.queryKey)),
+  );
 }
 
 function activeGitDetailQueries(queryClient: QueryClient, cwd: string, includeRemote = true) {
@@ -273,6 +355,12 @@ async function refreshActiveGitDetails(
     }),
     queryClient.invalidateQueries({
       queryKey: ["git", "file-at-rev", cwd] as const,
+      refetchType: "none",
+    }),
+    // Marked stale but not eagerly refetched: a commit object's patch never changes,
+    // and an open detail pane re-reads it when it remounts on the next selection.
+    queryClient.invalidateQueries({
+      queryKey: ["git", "commit-diff", cwd] as const,
       refetchType: "none",
     }),
   ]);
@@ -359,24 +447,27 @@ export function refreshGitQueriesForCwd(
   cwd: string,
   depth: GitRefreshDepth = "active-details",
   scope: GitRefreshScope = "all",
+  refetchHistory = false,
 ): Promise<void> {
   const existing = activeGitRefreshes.get(queryClient)?.get(cwd);
   if (existing && !existing.started) {
     if (depth === "active-details") existing.depth = "active-details";
     if (scope === "all") existing.includeRemote = true;
+    if (refetchHistory) existing.refetchHistory = true;
     return depth === "availability" ? existing.availability : existing.promise;
   }
 
   const entry: ActiveGitRefresh = {
     depth,
     includeRemote: scope === "all",
+    refetchHistory,
     started: false,
     availability: Promise.resolve(),
     promise: Promise.resolve(),
   };
   entry.availability = enqueueGitRefresh(queryClient, () => {
     entry.started = true;
-    return refreshGitAvailability(queryClient, cwd, entry.includeRemote);
+    return refreshGitAvailability(queryClient, cwd, entry.includeRemote, entry.refetchHistory);
   });
   // Read entry.depth only after availability settles so a pre-start upgrade to
   // "active-details" is honored even when the original request was availability-only.
@@ -401,6 +492,8 @@ function cachedGitCwds(queryClient: QueryClient): string[] {
     "status",
     "branches",
     "recent-commits",
+    "commit-history",
+    "commit-diff",
     "working-tree-diff",
     "pull-request",
   ]);
@@ -427,14 +520,20 @@ export function invalidateGitQueries(
   return Promise.all(
     cachedGitCwds(queryClient)
       .filter((cwd) => !excludedCwds.has(cwd))
-      .map((cwd) => refreshGitQueriesForCwd(queryClient, cwd)),
+      .map((cwd) => refreshGitQueriesForCwd(queryClient, cwd, "active-details", "all", true)),
   );
 }
 
 // Scope live file-change invalidations so unrelated project/worktree git caches stay warm.
+// Callers are mutation-driven (a user action or an applied agent change), so history is
+// re-read even when the availability snapshot looks unchanged.
 export function invalidateGitQueriesForCwds(queryClient: QueryClient, cwds: Iterable<string>) {
   const uniqueCwds = [...new Set([...cwds].filter((cwd) => cwd.length > 0))];
-  return Promise.all(uniqueCwds.map((cwd) => refreshGitQueriesForCwd(queryClient, cwd)));
+  return Promise.all(
+    uniqueCwds.map((cwd) =>
+      refreshGitQueriesForCwd(queryClient, cwd, "active-details", "all", true),
+    ),
+  );
 }
 
 /**
@@ -540,6 +639,64 @@ export function gitRecentCommitsQueryOptions(input: {
     staleTime: GIT_BRANCHES_STALE_TIME_MS,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
+  });
+}
+
+export function gitCommitHistoryQueryOptions(input: {
+  cwd: string | null;
+  ref: string | null;
+  limit?: number;
+  enabled?: boolean;
+}) {
+  const limit = input.limit ?? DEFAULT_GIT_COMMIT_HISTORY_LIMIT;
+  return infiniteQueryOptions({
+    queryKey: gitQueryKeys.commitHistory(input.cwd, input.ref, limit),
+    queryFn: async ({ pageParam }) => {
+      const api = ensureNativeApi();
+      if (!input.cwd) throw new Error("Commit history is unavailable.");
+      return api.git.listCommitHistory({
+        cwd: input.cwd,
+        limit,
+        skip: pageParam,
+        ...(input.ref ? { ref: input.ref } : {}),
+      });
+    },
+    initialPageParam: 0,
+    // Derive the next offset from the commits actually received, not the page index:
+    // a truncated server page returns fewer records than `limit` while still reporting
+    // `hasMore`, so `allPages.length * limit` would skip past commits.
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.hasMore
+        ? allPages.reduce((total, page) => total + page.commits.length, 0)
+        : undefined,
+    enabled: (input.enabled ?? true) && input.cwd !== null,
+    // History only moves when this client commits, fetches, or an agent does; the
+    // git invalidation pipeline covers those, so no polling is needed here.
+    staleTime: GIT_BRANCHES_STALE_TIME_MS,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    ...GIT_EXPENSIVE_READ_RETRY_OPTIONS,
+  });
+}
+
+export function gitCommitDiffQueryOptions(input: {
+  cwd: string | null;
+  sha: string | null;
+  enabled?: boolean;
+}) {
+  return queryOptions({
+    queryKey: gitQueryKeys.commitDiff(input.cwd, input.sha),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.sha) throw new Error("Commit is unavailable.");
+      return api.git.readCommitDiff({ cwd: input.cwd, sha: input.sha });
+    },
+    enabled: (input.enabled ?? true) && input.cwd !== null && input.sha !== null,
+    // A commit object never changes, so its patch is safe to cache for the session.
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    ...GIT_EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }
 
@@ -1028,5 +1185,153 @@ export function gitHandoffThreadMutationOptions(input: {
     mutationKey: gitMutationKeys.handoffThread(input.cwd),
     unavailableMessage: "Git handoff is unavailable.",
     run: (api, cwd, request) => api.git.handoffThread({ cwd, ...request }),
+  });
+}
+
+export function gitCheckoutCommitMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<{ sha: string }, void>({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.checkoutCommit(input.cwd),
+    unavailableMessage: "Checking out a commit is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { sha }) => api.git.checkoutCommit({ cwd, sha }),
+  });
+}
+
+export function gitCreateBranchMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { branch: string; publish?: boolean; startPoint?: string; checkout?: boolean },
+    Awaited<ReturnType<NativeApi["git"]["createBranch"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.createBranch(input.cwd),
+    unavailableMessage: "Creating a branch is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { branch, publish, startPoint, checkout }) =>
+      api.git.createBranch({
+        cwd,
+        branch,
+        ...(publish !== undefined ? { publish } : {}),
+        ...(startPoint !== undefined ? { startPoint } : {}),
+        ...(checkout !== undefined ? { checkout } : {}),
+      }),
+  });
+}
+
+export function gitCherryPickCommitMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { sha: string },
+    Awaited<ReturnType<NativeApi["git"]["cherryPickCommit"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.cherryPickCommit(input.cwd),
+    unavailableMessage: "Cherry-pick is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { sha }) => api.git.cherryPickCommit({ cwd, sha }),
+  });
+}
+
+export function gitRevertCommitMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { sha: string },
+    Awaited<ReturnType<NativeApi["git"]["revertCommit"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.revertCommit(input.cwd),
+    unavailableMessage: "Revert is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { sha }) => api.git.revertCommit({ cwd, sha }),
+  });
+}
+
+export function gitCreateTagMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { sha: string; name: string; message?: string },
+    Awaited<ReturnType<NativeApi["git"]["createTag"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.createTag(input.cwd),
+    unavailableMessage: "Creating a tag is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { sha, name, message }) =>
+      api.git.createTag({ cwd, sha, name, ...(message ? { message } : {}) }),
+  });
+}
+
+export function gitDeleteBranchRefMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { branch: string; force?: boolean; deleteRemote?: boolean },
+    Awaited<ReturnType<NativeApi["git"]["deleteBranchRef"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.deleteBranchRef(input.cwd),
+    unavailableMessage: "Deleting a branch is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { branch, force, deleteRemote }) =>
+      api.git.deleteBranchRef({
+        cwd,
+        branch,
+        ...(force !== undefined ? { force } : {}),
+        ...(deleteRemote !== undefined ? { deleteRemote } : {}),
+      }),
+  });
+}
+
+export function gitDeleteTagRefMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { name: string; deleteRemote?: boolean },
+    Awaited<ReturnType<NativeApi["git"]["deleteTagRef"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.deleteTagRef(input.cwd),
+    unavailableMessage: "Deleting a tag is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { name, deleteRemote }) =>
+      api.git.deleteTagRef({ cwd, name, ...(deleteRemote !== undefined ? { deleteRemote } : {}) }),
+  });
+}
+
+export function gitCheckoutRemoteBranchMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { remoteBranch: string },
+    Awaited<ReturnType<NativeApi["git"]["checkoutRemoteBranch"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.checkoutRemoteBranch(input.cwd),
+    unavailableMessage: "Checking out a remote branch is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { remoteBranch }) => api.git.checkoutRemoteBranch({ cwd, remoteBranch }),
   });
 }

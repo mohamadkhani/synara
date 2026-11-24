@@ -138,3 +138,34 @@ export function formatDayAwareTimestamp(
         ).format(date);
   return `${dayLabel} ${time}`;
 }
+
+/**
+ * Compact timestamp for history rows: the clock time today, the weekday for the
+ * last week, and a short date after that. A narrow list column has no room for
+ * both, and past days are identified by their day, not their hour.
+ */
+export function formatHistoryTimestamp(
+  isoDate: string,
+  timestampFormat: TimestampFormat,
+  now: Date = new Date(),
+  locale = getFormatLocale(),
+): string {
+  const date = new Date(isoDate);
+  if (isSameCalendarDay(date, now)) {
+    return getTimestampFormatter(timestampFormat, false, false, locale).format(date);
+  }
+
+  const daysAgo = calendarDaysBetween(date, now);
+  if (daysAgo > 0 && daysAgo < 7) {
+    return getDayLabelFormatter({ weekday: "short" }, locale).format(date);
+  }
+
+  return getDayLabelFormatter(
+    {
+      month: "short",
+      day: "numeric",
+      ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+    },
+    locale,
+  ).format(date);
+}

@@ -51,6 +51,18 @@
   --color-status-open: var(--status-open);
   --color-status-merged: var(--status-merged);
   --color-status-neutral: var(--status-neutral);
+  /* Git graph lanes: saturated, mid-lightness hues that stay legible on both
+     surfaces. The generic status tokens above are too muted for lane lines. */
+  --color-git-lane-1: #3b82f6;
+  --color-git-lane-2: #f59e0b;
+  --color-git-lane-3: #10b981;
+  --color-git-lane-4: #a855f7;
+  --color-git-lane-5: #ef4444;
+  --color-git-lane-6: #06b6d4;
+  --color-git-lane-7: #84cc16;
+  --color-git-lane-8: #ec4899;
+  --color-git-lane-9: #14b8a6;
+  --color-git-lane-10: #8b5cf6;
   --color-info-foreground: var(--info-foreground);
   --color-info: var(--info);
   --color-destructive-foreground: var(--destructive-foreground);

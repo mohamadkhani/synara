@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { formatDayAwareTimestamp, formatShortTimestamp } from "./timestampFormat";
+import {
+  formatDayAwareTimestamp,
+  formatHistoryTimestamp,
+  formatShortTimestamp,
+} from "./timestampFormat";
 
 // Build ISO strings from local wall-clock components so expectations are
 // stable regardless of the timezone the test runner uses.
@@ -74,5 +78,42 @@ describe("formatDayAwareTimestamp", () => {
     expect(formatDayAwareTimestamp(isoDate, "24-hour", now)).toBe(
       `${dayLabel} ${formatShortTimestamp(isoDate, "24-hour")}`,
     );
+  });
+});
+
+describe("formatHistoryTimestamp", () => {
+  const now = new Date(2026, 2, 17, 23, 0); // Tuesday, March 17 2026, 23:00 local
+
+  it("shows the clock time for commits made today", () => {
+    const isoDate = localIso(2026, 2, 17, 9, 5);
+    expect(formatHistoryTimestamp(isoDate, "24-hour", now)).toBe(
+      formatShortTimestamp(isoDate, "24-hour"),
+    );
+  });
+
+  it("shows the short weekday instead of the hour for the last week", () => {
+    const isoDate = localIso(2026, 2, 14, 8, 30);
+    const weekday = new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(
+      new Date(isoDate),
+    );
+    expect(formatHistoryTimestamp(isoDate, "24-hour", now)).toBe(weekday);
+  });
+
+  it("shows a short date for older commits", () => {
+    const isoDate = localIso(2026, 2, 9, 8, 30);
+    const date = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
+      new Date(isoDate),
+    );
+    expect(formatHistoryTimestamp(isoDate, "24-hour", now)).toBe(date);
+  });
+
+  it("adds the year when the commit is from another year", () => {
+    const isoDate = localIso(2025, 11, 31, 18, 45);
+    const date = new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(new Date(isoDate));
+    expect(formatHistoryTimestamp(isoDate, "24-hour", now)).toBe(date);
   });
 });
