@@ -118,6 +118,7 @@ interface ChatKeyboardShortcutsInput {
   showGitActions: boolean;
   isGitRepo: boolean;
   onToggleBrowser: () => void;
+  onOpenGitHistory: (() => void) | undefined;
   copyThreadIdToClipboard: (threadId: string) => void;
   activeProject: Project | undefined;
   runProjectScript: ReturnType<typeof useChatProjectScripts>["runProjectScript"];
@@ -172,6 +173,7 @@ export function useChatKeyboardShortcuts({
   showGitActions,
   isGitRepo,
   onToggleBrowser,
+  onOpenGitHistory,
   copyThreadIdToClipboard,
   activeProject,
   runProjectScript,
@@ -445,6 +447,16 @@ export function useChatKeyboardShortcuts({
         return;
       }
 
+      if (command === "git.history") {
+        // Outside a repository, or on a surface without a dock, the pane could not
+        // open; leave the chord untouched instead of swallowing it.
+        if (!isGitRepo || !onOpenGitHistory) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenGitHistory();
+        return;
+      }
+
       if (command === "browser.toggle") {
         event.preventDefault();
         event.stopPropagation();
@@ -511,6 +523,7 @@ export function useChatKeyboardShortcuts({
     terminalWorkspaceOpen,
     terminalWorkspaceTerminalTabActive,
     onToggleBrowser,
+    onOpenGitHistory,
     onToggleDevicePanel,
     onToggleDiff,
     onInterruptFromStopControl,

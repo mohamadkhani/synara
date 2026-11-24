@@ -111,8 +111,8 @@ decoration pauses while its chat is hidden.
 - **Terminal** — a real shell opened in the task's working directory
 - **Browser** — a shared live page surface for previews, semantic automation, and page-declared
   WebMCP tools
-- **Diff and Git views** — the changes produced in the environment and the path toward committing or
-  opening a PR
+- **Diff and Git views** — the changes produced in the environment, the commit history graph for
+  reviewing what has landed, and the path toward committing or opening a PR
 
 You do not need every surface open at once. Bring each one in when it answers a question: what is
 running, what changed, whether the UI works, or whether the task is safe to ship.

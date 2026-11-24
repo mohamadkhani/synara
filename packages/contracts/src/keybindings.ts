@@ -105,6 +105,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "editor.debug.stepInto",
   "editor.debug.stepOut",
   "git.commitAndPush",
+  "git.history",
   "search.files",
   "search.content",
 ] as const;

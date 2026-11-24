@@ -47,7 +47,7 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   file: { label: "File", Icon: FileIcon },
   terminal: { label: "Terminal", Icon: TerminalIcon },
   sidechat: { label: "Side chats", Icon: SidechatIcon },
-  git: { label: "Git", Icon: GitCommitIcon },
+  git: { label: "Git Graph", Icon: GitCommitIcon },
   pullRequest: { label: "Pull request", Icon: GitPullRequestIcon },
   subagents: { label: "Subagents", Icon: BotIcon },
   backgroundTasks: { label: "Background tasks", Icon: BackgroundTrayIcon },

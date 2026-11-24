@@ -625,6 +625,7 @@ interface ChatViewProps {
   onToggleDiffPanel?: () => void;
   onToggleRightDock?: () => void;
   onToggleBrowserPanel?: () => void;
+  onOpenGitHistoryPanel?: () => void;
   onToggleDevicePanel?: () => void;
   onOpenBrowserUrl?: (url: string) => void;
   onOpenTurnDiffPanel?: (turnId: TurnId, filePath?: string) => void;
@@ -658,6 +659,7 @@ export default function ChatView({
   onToggleDiffPanel,
   onToggleRightDock,
   onToggleBrowserPanel,
+  onOpenGitHistoryPanel,
   onToggleDevicePanel,
   onOpenBrowserUrl,
   onOpenTurnDiffPanel,
@@ -2884,6 +2886,9 @@ export default function ChatView({
       },
     });
   }, [diffEnvironmentPending, diffOpen, navigate, onToggleDiffPanel, threadId]);
+  const onOpenGitHistory = useCallback(() => {
+    onOpenGitHistoryPanel?.();
+  }, [onOpenGitHistoryPanel]);
   const onToggleBrowser = useCallback(() => {
     if (onToggleBrowserPanel) {
       onToggleBrowserPanel();
@@ -4285,6 +4290,7 @@ export default function ChatView({
     showGitActions,
     isGitRepo,
     onToggleBrowser,
+    onOpenGitHistory,
     copyThreadIdToClipboard,
     activeProject,
     runProjectScript,
@@ -6304,6 +6310,7 @@ export default function ChatView({
       : setProjectInstructions,
     onCopyProjectInstructionsToNotes: handleCopyProjectInstructionsToNotes,
     onToggleDiff,
+    onOpenGitHistory,
     onOpenAutomation: (definition: AutomationDefinition) => onOpenAutomation(definition.id),
     onOpenGithubRepository: openBrowserUrl,
     onJumpToPinnedMessage: handleJumpToPinnedMessage,

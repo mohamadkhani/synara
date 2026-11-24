@@ -141,6 +141,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+b", command: "browser.toggle", when: "!terminalFocus" },
   { key: "mod+alt+s", command: "sidechat.toggle", when: "!terminalFocus || isMac" },
   { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+g", command: "git.history", when: "!terminalFocus" },
   { key: "alt+arrowdown", command: "diff.change.next", when: "!terminalFocus" },
   { key: "alt+arrowup", command: "diff.change.previous", when: "!terminalFocus" },
   // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.

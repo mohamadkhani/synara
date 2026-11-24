@@ -162,11 +162,11 @@ type When =
 const id = (name: string): When => ({ type: "identifier", name });
 const not = (node: When): When => ({ type: "not", node });
 const and = (left: When, right: When): When => ({ type: "and", left, right });
-const shortcut = (key: string, mod = true, ctrl = false) => ({
+const shortcut = (key: string, mod = true, ctrl = false, shift = false) => ({
   key,
   metaKey: false,
   ctrlKey: ctrl,
-  shiftKey: false,
+  shiftKey: shift,
   altKey: false,
   modKey: mod,
 });
@@ -195,21 +195,30 @@ const KEYBINDINGS: ResolvedKeybindingsConfig = [
     shortcut: shortcut("2", false, true),
     whenAst: id("terminalWorkspaceOpen"),
   },
+  // The shipped chord is mod+shift+g; keep the shift here so the test exercises the
+  // real binding rather than an unshifted near-miss.
+  {
+    command: "git.history",
+    shortcut: shortcut("g", true, false, true),
+    whenAst: not(id("terminalFocus")),
+  },
   ...DEFAULT_SHORTCUT_FALLBACKS,
 ];
 
-function keydown(key: string, opts: { ctrl?: boolean; meta?: boolean } = {}) {
+function keydown(key: string, opts: { ctrl?: boolean; meta?: boolean; shift?: boolean } = {}) {
   const event = new FakeKeyboardEvent({
     key,
     code: `Digit${key}`,
     ctrlKey: opts.ctrl ?? false,
     metaKey: opts.meta ?? false,
+    shiftKey: opts.shift ?? false,
   });
   fakeWindow.dispatchEvent(event);
   return event;
 }
 
 interface HarnessOptions {
+  isGitRepo?: boolean;
   terminalOpen?: boolean;
   workspaceLayout?: "both" | "terminal-only";
   workspaceActiveTab?: "terminal" | "chat";
@@ -222,6 +231,7 @@ function mountHarness(options: HarnessOptions = {}) {
   const workspaceActiveTab = options.workspaceActiveTab ?? "terminal";
   const terminalWorkspaceOpen = terminalOpen;
   const calls = {
+    onOpenGitHistory: vi.fn(),
     closeTerminal: vi.fn(),
     closeActiveWorkspaceView: vi.fn(),
     setTerminalWorkspaceTab: vi.fn(),
@@ -284,8 +294,9 @@ function mountHarness(options: HarnessOptions = {}) {
       onToggleDiff: vi.fn(),
       commitAndPushTriggerRef: { current: null },
       showGitActions: false,
-      isGitRepo: false,
+      isGitRepo: options.isGitRepo ?? false,
       onToggleBrowser: vi.fn(),
+      onOpenGitHistory: calls.onOpenGitHistory,
       copyThreadIdToClipboard: vi.fn(),
       activeProject: undefined,
       runProjectScript: vi.fn(),
@@ -295,6 +306,38 @@ function mountHarness(options: HarnessOptions = {}) {
   render();
   return { calls, render, threadId };
 }
+
+describe("git.history chord", () => {
+  it("opens history from a git thread", () => {
+    const { calls } = mountHarness({ isGitRepo: true });
+    const event = keydown("g", { meta: true, shift: true });
+    expect(calls.onOpenGitHistory).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("leaves the unshifted chord alone", () => {
+    const { calls } = mountHarness({ isGitRepo: true });
+    const event = keydown("g", { meta: true });
+    expect(calls.onOpenGitHistory).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("leaves the chord untouched outside a repository", () => {
+    const { calls } = mountHarness({ isGitRepo: false });
+    const event = keydown("g", { meta: true, shift: true });
+    expect(calls.onOpenGitHistory).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("leaves the chord to the terminal while a terminal pane has focus", () => {
+    fakeDocument.activeElement = new FakeElement(["xterm-helper-textarea"]);
+    const { calls } = mountHarness({ isGitRepo: true, terminalOpen: true });
+    const event = keydown("g", { meta: true, shift: true });
+    expect(calls.onOpenGitHistory).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    fakeDocument.activeElement = null;
+  });
+});
 
 describe("mod+w chord ownership", () => {
   it("closes the active thread tab on a regular chat surface", () => {
@@ -472,6 +515,7 @@ describe("workspace tab switching (issue #1984)", () => {
         showGitActions: false,
         isGitRepo: false,
         onToggleBrowser: vi.fn(),
+        onOpenGitHistory: undefined,
         copyThreadIdToClipboard: vi.fn(),
         activeProject: undefined,
         runProjectScript: vi.fn(),

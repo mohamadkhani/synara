@@ -315,6 +315,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     label: "Commit and push",
     description: "Commit pending changes and push the active thread's repo.",
   },
+  {
+    command: "git.history",
+    label: "Git Graph",
+    description: "Open the active thread's commit history graph.",
+  },
 ] as const;
 
 const THREAD_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(

@@ -35,7 +35,15 @@ import { toastManager } from "~/components/ui/toast";
 import { isElectron } from "~/env";
 import { basenameOfPath } from "~/file-icons";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
-import { ChangesIcon, ExternalLinkIcon, GitHubIcon, SettingsIcon, FolderIcon } from "~/lib/icons";
+import { shortcutLabelForCommand } from "~/keybindings";
+import {
+  ChangesIcon,
+  ExternalLinkIcon,
+  FolderIcon,
+  GitCommitIcon,
+  GitHubIcon,
+  SettingsIcon,
+} from "~/lib/icons";
 import { readNativeApi } from "~/nativeApi";
 import { revealFolderInShell } from "~/lib/revealFolder";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
@@ -190,6 +198,8 @@ export interface EnvironmentPanelProps {
   };
   /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
+  /** Open the right-dock Git pane and focus its commit history graph. */
+  onOpenGitHistory: () => void;
   /** Open the shared automation editor for a thread-bound automation row. */
   onOpenAutomation: (definition: AutomationDefinition) => void;
   /** Open the repository URL in the in-app browser panel. */
@@ -280,6 +290,7 @@ export function EnvironmentPanel({
   onCopyProjectInstructionsToNotes,
   projectActions,
   onToggleDiff,
+  onOpenGitHistory,
   onOpenAutomation,
   onOpenGithubRepository,
   onJumpToPinnedMessage,
@@ -313,6 +324,7 @@ export function EnvironmentPanel({
   // Disable the Changes row only when the diff cannot be opened *and* is not already open
   // (so an open diff stays toggleable closed even when there are no pending changes).
   const changesDisabled = diffDisabledReason !== null && !diffOpen;
+  const gitHistoryShortcutLabel = shortcutLabelForCommand(keybindings, "git.history");
   const showRecap = Boolean(recap?.text) || recap?.status === "pending";
   const markdownCwd = openInTarget ?? gitCwd ?? undefined;
   const showGroupFolderRow = shouldShowGroupFolderRow({
@@ -374,25 +386,42 @@ export function EnvironmentPanel({
       ) : null}
 
       {isGitRepo ? (
-        <EnvironmentRow
-          icon={<ChangesIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-          label={
-            <span className="flex flex-col">
-              <span>{t("git:panel_changes")}</span>
-              {checkpointBaselineUnavailable ? (
-                <span className="whitespace-normal text-ui-xs text-muted-foreground">
-                  {t("chat:checkpointBaselineUnavailable")}
+        <>
+          <EnvironmentRow
+            icon={<ChangesIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+            label={
+              <span className="flex flex-col">
+                <span>{t("git:panel_changes")}</span>
+                {checkpointBaselineUnavailable ? (
+                  <span className="whitespace-normal text-ui-xs text-muted-foreground">
+                    {t("chat:checkpointBaselineUnavailable")}
+                  </span>
+                ) : null}
+              </span>
+            }
+            trailing={hasChanges ? <DiffStat insertions={additions} deletions={deletions} /> : null}
+            disabled={changesDisabled}
+            onClick={() => {
+              onToggleDiff();
+              onClose();
+            }}
+          />
+          <EnvironmentRow
+            icon={<GitCommitIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+            label={<span className="truncate">{t("git:historyTabHistory")}</span>}
+            trailing={
+              gitHistoryShortcutLabel ? (
+                <span className="shrink-0 text-ui-xs font-medium tracking-wide text-muted-foreground">
+                  {gitHistoryShortcutLabel}
                 </span>
-              ) : null}
-            </span>
-          }
-          trailing={hasChanges ? <DiffStat insertions={additions} deletions={deletions} /> : null}
-          disabled={changesDisabled}
-          onClick={() => {
-            onToggleDiff();
-            onClose();
-          }}
-        />
+              ) : null
+            }
+            onClick={() => {
+              onOpenGitHistory();
+              onClose();
+            }}
+          />
+        </>
       ) : null}
 
       {isGitRepo && branchToolbar ? <BranchToolbar {...branchToolbar} variant="panel" /> : null}

@@ -365,6 +365,10 @@ export function SingleChatSurface(props: {
     requestImmediateDockHydration("device");
     toggleSingletonPane(props.threadId, { kind: "device" });
   };
+  const handleOpenGitHistory = () => {
+    requestImmediateDockHydration("git");
+    openPane(props.threadId, { kind: "git" });
+  };
   const handleToggleRightDock = () => {
     setDockOpen(props.threadId, !dockState.open);
   };
@@ -971,11 +975,7 @@ export function SingleChatSurface(props: {
       case "git":
         return (
           <Suspense fallback={<PanelStateMessage>{t("chat:loadingGit")}</PanelStateMessage>}>
-            <GitPanel
-              hostThreadId={props.threadId}
-              projectId={props.projectId}
-              onClose={() => closePane(props.threadId, pane.id)}
-            />
+            <GitPanel hostThreadId={props.threadId} projectId={props.projectId} />
           </Suspense>
         );
       case "explorer":
@@ -1200,6 +1200,7 @@ export function SingleChatSurface(props: {
               onToggleDiff={handleToggleDiff}
               onToggleRightDock={handleToggleRightDock}
               onToggleBrowser={handleToggleBrowser}
+              onOpenGitHistory={handleOpenGitHistory}
               onOpenBrowserUrl={handleOpenBrowserUrl}
               onOpenTurnDiff={handleOpenTurnDiff}
               {...(hasDeviceSupport ? { onToggleDevice: handleToggleDevice } : {})}
