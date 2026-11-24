@@ -112,6 +112,7 @@ export const gitMutationKeys = {
   checkout: (cwd: string | null) => ["git", "mutation", "checkout", cwd] as const,
   runStackedAction: (cwd: string | null) => ["git", "mutation", "run-stacked-action", cwd] as const,
   pull: (cwd: string | null) => ["git", "mutation", "pull", cwd] as const,
+  fetch: (cwd: string | null) => ["git", "mutation", "fetch", cwd] as const,
   preparePullRequestThread: (cwd: string | null) =>
     ["git", "mutation", "prepare-pull-request-thread", cwd] as const,
   handoffThread: (cwd: string | null) => ["git", "mutation", "handoff-thread", cwd] as const,
@@ -1087,6 +1088,18 @@ export function gitPullMutationOptions(input: { cwd: string | null; queryClient:
     invalidate: "cwd",
     awaitInvalidation: false,
     run: (api, cwd) => api.git.pull({ cwd }),
+  });
+}
+
+export function gitFetchMutationOptions(input: { cwd: string | null; queryClient: QueryClient }) {
+  return makeGitMutationOptions<void, Awaited<ReturnType<NativeApi["git"]["fetch"]>>>({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.fetch(input.cwd),
+    unavailableMessage: "Git fetch is unavailable.",
+    invalidate: "cwd",
+    awaitInvalidation: false,
+    run: (api, cwd) => api.git.fetch({ cwd }),
   });
 }
 

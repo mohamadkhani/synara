@@ -208,6 +208,11 @@ export const GitPullInput = Schema.Struct({
 });
 export type GitPullInput = typeof GitPullInput.Type;
 
+export const GitFetchInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+});
+export type GitFetchInput = typeof GitFetchInput.Type;
+
 export const GIT_READ_FILE_AT_REV_MAX_BYTES = 1_000_000;
 const GIT_READ_FILE_AT_REV_PATH_MAX_LENGTH = 2048;
 
@@ -811,6 +816,11 @@ export const GitPullResult = Schema.Struct({
   upstreamBranch: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
 });
 export type GitPullResult = typeof GitPullResult.Type;
+
+export const GitFetchResult = Schema.Struct({
+  remote: TrimmedNonEmptyStringSchema,
+});
+export type GitFetchResult = typeof GitFetchResult.Type;
 
 export const GitSummarizeDiffResult = Schema.Struct({
   summary: TrimmedNonEmptyStringSchema,

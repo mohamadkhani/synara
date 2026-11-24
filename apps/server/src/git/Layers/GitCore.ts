@@ -4214,6 +4214,21 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         );
       }).pipe(Effect.asVoid);
 
+    const fetchPrimaryRemote: GitCoreShape["fetchPrimaryRemote"] = (cwd) =>
+      Effect.gen(function* () {
+        const remoteName = yield* resolvePrimaryRemoteName(cwd);
+        yield* executeGit(
+          "GitCore.fetchPrimaryRemote",
+          cwd,
+          ["fetch", "--prune", "--tags", remoteName],
+          {
+            timeoutMs: 60_000,
+            fallbackErrorMessage: "git fetch failed",
+          },
+        );
+        return { remote: remoteName };
+      });
+
     const setBranchUpstream: GitCoreShape["setBranchUpstream"] = (input) =>
       runGit("GitCore.setBranchUpstream", input.cwd, [
         "branch",
@@ -4791,6 +4806,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       fetchPullRequestCommit,
       ensureRemote,
       fetchRemoteBranch,
+      fetchPrimaryRemote,
       setBranchUpstream,
       removeWorktree,
       deleteBranch,

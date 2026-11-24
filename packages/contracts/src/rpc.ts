@@ -262,6 +262,8 @@ import {
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullInput,
+  GitFetchInput,
+  GitFetchResult,
   GitPullRequestRefInput,
   GitPullRequestSnapshotInput,
   GitPullRequestSnapshotResult,
@@ -1335,6 +1337,12 @@ export const WsGitReadCommitDiffRpc = Rpc.make(WS_METHODS.gitReadCommitDiff, {
 export const WsGitCheckoutRemoteBranchRpc = Rpc.make(WS_METHODS.gitCheckoutRemoteBranch, {
   payload: GitCheckoutRemoteBranchInput,
   success: GitCheckoutRemoteBranchResult,
+  error: WsRpcError,
+});
+
+export const WsGitFetchRpc = Rpc.make(WS_METHODS.gitFetch, {
+  payload: GitFetchInput,
+  success: GitFetchResult,
   error: WsRpcError,
 });
 
@@ -2489,6 +2497,7 @@ export type WsFeatureRpc =
   | typeof WsGitReadCommitDiffRpc
   | typeof WsGitCheckoutCommitRpc
   | typeof WsGitCheckoutRemoteBranchRpc
+  | typeof WsGitFetchRpc
   | typeof WsGitCherryPickCommitRpc
   | typeof WsGitRevertCommitRpc
   | typeof WsGitCreateTagRpc
@@ -2705,6 +2714,7 @@ const wsApplicationRpcGroup = RpcGroup.make(
   WsGitReadCommitDiffRpc,
   WsGitCheckoutCommitRpc,
   WsGitCheckoutRemoteBranchRpc,
+  WsGitFetchRpc,
   WsGitCherryPickCommitRpc,
   WsGitRevertCommitRpc,
   WsGitCreateTagRpc,

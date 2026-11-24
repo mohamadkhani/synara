@@ -198,6 +198,8 @@ import type {
   GitRevertCommitInput,
   GitPullInput,
   GitPullResult,
+  GitFetchInput,
+  GitFetchResult,
   GitBlameLineInput,
   GitBlameLineResult,
   GitReadFileAtRevInput,
@@ -1395,6 +1397,7 @@ export interface NativeApi {
     ) => Promise<GitPreparePullRequestThreadResult>;
     // Stacked action API
     pull: (input: GitPullInput) => Promise<GitPullResult>;
+    fetch: (input: GitFetchInput) => Promise<GitFetchResult>;
     status: (input: GitStatusInput) => Promise<GitStatusResult>;
     readWorkingTreeDiff: (
       input: GitReadWorkingTreeDiffInput,

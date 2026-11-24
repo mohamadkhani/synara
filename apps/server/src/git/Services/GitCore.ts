@@ -479,6 +479,11 @@ export interface GitCoreShape {
   ) => Effect.Effect<void, GitCommandError>;
 
   /**
+   * Fetch the repository's primary remote with pruning and tags, returning its name.
+   */
+  readonly fetchPrimaryRemote: (cwd: string) => Effect.Effect<{ remote: string }, GitCommandError>;
+
+  /**
    * Set the upstream tracking branch for a local branch.
    */
   readonly setBranchUpstream: (

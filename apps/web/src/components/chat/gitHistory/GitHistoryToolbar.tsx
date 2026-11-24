@@ -4,11 +4,12 @@
 
 import type { GitBranch } from "@synara/contracts";
 
-import { GitBranchIcon, RefreshCwIcon, WorktreeIcon } from "~/lib/icons";
+import { DownloadIcon, GitBranchIcon, RefreshCwIcon, WorktreeIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useTranslation } from "~/i18n";
 import { Button } from "../../ui/button";
 import { IconButton } from "../../ui/icon-button";
+import { Spinner } from "../../ui/spinner";
 import {
   Menu,
   MenuCheckboxItem,
@@ -56,6 +57,8 @@ export function GitHistoryToolbar(props: {
   onSearchChange: (value: string) => void;
   refreshing: boolean;
   onRefresh: () => void;
+  fetching: boolean;
+  onFetch: () => void;
 }) {
   const { t } = useTranslation();
   const selectBranch = (value: string) => props.onBranchFilterChange(value);
@@ -197,6 +200,20 @@ export function GitHistoryToolbar(props: {
           aria-label={t("git:historySearchPlaceholder")}
         />
       </div>
+      <IconButton
+        size="icon-xs"
+        variant="ghost"
+        label={t("git:historyFetch")}
+        tooltip={t("git:historyFetch")}
+        disabled={props.fetching}
+        onClick={props.onFetch}
+      >
+        {props.fetching ? (
+          <Spinner aria-hidden className="size-3.5" />
+        ) : (
+          <DownloadIcon className="size-3.5" />
+        )}
+      </IconButton>
       <IconButton
         size="icon-xs"
         variant="ghost"

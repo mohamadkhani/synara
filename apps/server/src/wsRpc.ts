@@ -2604,6 +2604,14 @@ const makeWsRpcHandlersLayer = () =>
             ),
             "Failed to check out remote branch",
           ),
+        [WS_METHODS.gitFetch]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.fetchPrimaryRemote(input.cwd)),
+            ),
+            "Failed to fetch remote",
+          ),
         [WS_METHODS.gitCheckout]: (input) =>
           rpcEffect(
             refreshGitStatusAfter(

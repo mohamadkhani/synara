@@ -715,6 +715,7 @@ export function createWsNativeApi(): NativeApi {
     git: {
       githubRepository: (input) => executionRequest(WS_METHODS.gitGithubRepository, input),
       pull: (input) => executionRequest(WS_METHODS.gitPull, input),
+      fetch: (input) => executionRequest(WS_METHODS.gitFetch, input, { timeoutMs: null }),
       status: (input) => executionRequest(WS_METHODS.gitStatus, input),
       readWorkingTreeDiff: (input) => executionRequest(WS_METHODS.gitReadWorkingTreeDiff, input),
       readFileAtRev: (input) => executionRequest(WS_METHODS.gitReadFileAtRev, input),

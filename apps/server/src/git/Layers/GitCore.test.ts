@@ -1788,6 +1788,44 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
+  describe("fetchPrimaryRemote", () => {
+    it.effect("fetches the primary remote with pruning and tags", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const remote = yield* makeTmpDir();
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(tmp, ["remote", "add", "origin", remote]);
+
+        const realCore = yield* GitCore;
+        let fetchArgs: ReadonlyArray<string> = [];
+        const core = yield* makeIsolatedGitCore((input) =>
+          Effect.gen(function* () {
+            if (input.operation === "GitCore.fetchPrimaryRemote") fetchArgs = input.args;
+            return yield* realCore.execute(input);
+          }),
+        );
+
+        const result = yield* core.fetchPrimaryRemote(tmp);
+
+        expect(result).toEqual({ remote: "origin" });
+        expect(fetchArgs).toEqual(["fetch", "--prune", "--tags", "origin"]);
+      }),
+    );
+
+    it.effect("fails when no remote is configured", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const error = yield* (yield* GitCore).fetchPrimaryRemote(tmp).pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+        expect(error.message).toContain("No git remote is configured");
+      }),
+    );
+  });
+
   describe("delete refs", () => {
     it.effect("deletes a local branch and, on request, its remote counterpart", () =>
       Effect.gen(function* () {

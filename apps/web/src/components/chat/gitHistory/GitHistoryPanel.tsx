@@ -3,7 +3,7 @@
 //          lane graph on the left and the selected commit's patch underneath.
 // Layer: Git history UI
 
-import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
@@ -13,6 +13,7 @@ import { useAppSettings } from "~/appSettings";
 import {
   gitBranchesQueryOptions,
   gitCommitHistoryQueryOptions,
+  gitFetchMutationOptions,
   gitWorkingTreeDiffStatsQueryOptions,
   refreshGitQueriesForCwd,
 } from "~/lib/gitReactQuery";
@@ -85,6 +86,25 @@ export function GitHistoryPanel(props: {
   const queryClient = useQueryClient();
   const commitActions = useGitCommitActions({ cwd: viewCwd });
   const deferredSearch = useDeferredValue(search);
+  const fetchMutation = useMutation(gitFetchMutationOptions({ cwd: viewCwd, queryClient }));
+
+  const fetchRemote = useCallback(async () => {
+    if (!viewCwd) return;
+    try {
+      const result = await fetchMutation.mutateAsync();
+      toastManager.add({
+        type: "success",
+        title: t("git:historyFetched", { value0: result.remote }),
+      });
+      await refreshGitQueriesForCwd(queryClient, viewCwd);
+    } catch (cause) {
+      toastManager.add({
+        type: "error",
+        title: t("git:historyFetchFailed"),
+        description: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+  }, [fetchMutation, queryClient, viewCwd, t]);
 
   useEffect(() => {
     setViewCwd(props.activeCwd);
@@ -436,6 +456,8 @@ export function GitHistoryPanel(props: {
         onSearchChange={setSearch}
         refreshing={refreshing}
         onRefresh={() => void historyQuery.refetch()}
+        fetching={fetchMutation.isPending}
+        onFetch={() => void fetchRemote()}
       />
 
       {historyQuery.error ? (
