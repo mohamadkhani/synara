@@ -204,6 +204,10 @@ function CommitFileCard(props: {
         fileDiff={props.fileDiff}
         theme={props.theme}
         collapsed={!props.expanded}
+        // A pinned header keeps its own scrolled rows visible above the header band
+        // when several files share one scroll surface; scrolling it with the card
+        // keeps the list readable.
+        stickyHeader={false}
         renderHeaderTrailing={() => (
           <span className="flex shrink-0 items-center gap-1.5">
             {props.fileAction ? (

@@ -51,6 +51,10 @@ export function FileDiffCard(props: {
   diffStyle?: "unified" | "split";
   overflow?: "scroll" | "wrap";
   collapsed?: boolean;
+  /** The library pins the file header to the scrollport; callers that render many
+   *  files in one scroll surface can turn it off so a card's own rows never paint
+   *  above the header band. */
+  stickyHeader?: boolean;
   /** Trailing header chrome (actions menu, collapse chevron). */
   renderHeaderTrailing?: () => ReactNode;
   onLineClick?: ((line: DiffLineClickProps) => void) | undefined;
@@ -66,6 +70,7 @@ export function FileDiffCard(props: {
         themeType: props.theme,
         unsafeCSS: buildDiffPanelUnsafeCSS(props.theme),
         ...(props.collapsed !== undefined ? { collapsed: props.collapsed } : {}),
+        ...(props.stickyHeader !== undefined ? { stickyHeader: props.stickyHeader } : {}),
         ...(props.onLineClick ? { onLineClick: props.onLineClick } : {}),
       }}
       renderCustomHeader={(fileDiff) => (
