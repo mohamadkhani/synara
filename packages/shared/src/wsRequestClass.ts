@@ -57,6 +57,10 @@ const EXPENSIVE_READ_METHODS = new Set<string>([
   WS_METHODS.gitBlameLine,
   WS_METHODS.gitReadFileAtRev,
   WS_METHODS.gitListRecentCommits,
+  // The history pane opens its stats reads and its first page together. Commit
+  // history and one commit's patch are bounded, user-driven reads (page cap and a
+  // truncated patch), so they stay in the standard class; keeping them expensive
+  // made a cold pane exceed the per-connection expensive-read budget on its own.
   WS_METHODS.gitWorkingTreeDiffStats,
   WS_METHODS.gitSummarizeDiff,
   WS_METHODS.gitPullRequestSnapshot,

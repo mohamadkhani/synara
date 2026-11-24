@@ -2486,6 +2486,49 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
         [WS_METHODS.gitListRecentCommits]: (input) =>
           rpcEffect(git.listRecentCommits(input), "Failed to list recent commits"),
+        [WS_METHODS.gitListCommitHistory]: (input) =>
+          rpcEffect(git.listCommitHistory(input), "Failed to list commit history"),
+        [WS_METHODS.gitReadCommitDiff]: (input) =>
+          rpcEffect(git.readCommitDiff(input), "Failed to read commit"),
+        [WS_METHODS.gitCheckoutCommit]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.checkoutCommit(input)),
+            ).pipe(Effect.asVoid),
+            "Failed to checkout commit",
+          ),
+        [WS_METHODS.gitCherryPickCommit]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.cherryPickCommit(input)),
+            ),
+            "Failed to cherry-pick commit",
+          ),
+        [WS_METHODS.gitRevertCommit]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.revertCommit(input))),
+            "Failed to revert commit",
+          ),
+        [WS_METHODS.gitDeleteBranchRef]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.deleteBranchRef(input)),
+            ),
+            "Failed to delete branch",
+          ),
+        [WS_METHODS.gitDeleteTagRef]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.deleteTagRef(input))),
+            "Failed to delete tag",
+          ),
+        [WS_METHODS.gitCreateTag]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.createTag(input))),
+            "Failed to create tag",
+          ),
         // The created worktree is the result; its status/PR refresh runs in the background.
         [WS_METHODS.gitCreateWorktree]: (input) =>
           rpcEffect(
@@ -2552,6 +2595,14 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.createBranch(input))),
             "Failed to create branch",
+          ),
+        [WS_METHODS.gitCheckoutRemoteBranch]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, Effect.scoped(git.checkoutRemoteBranch(input))),
+            ),
+            "Failed to check out remote branch",
           ),
         [WS_METHODS.gitCheckout]: (input) =>
           rpcEffect(

@@ -1,5 +1,8 @@
 // FILE: GitCore.ts
 // Purpose: Implements low-level Git operations used by server orchestration and UI status.
+//          Commit-history and ref operations (log paging, commit patches, detached and
+//          remote-tracking checkout, cherry-pick, revert, tags, ref deletes) live in
+//          GitHistoryOps.ts and are composed into the core shape at the end of makeGitCore.
 // Layer: Server Git service
 // Exports: GitCoreLive plus makeGitCore test factory.
 import {
@@ -40,6 +43,7 @@ import { decodeJsonResult } from "@synara/shared/schemaJson";
 
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import { parseGitBlamePorcelain } from "../gitBlameParsing.ts";
+import { makeGitHistoryOps } from "./GitHistoryOps.ts";
 import {
   countTextFileLines,
   normalizeConfiguredMergeBranch,
@@ -195,7 +199,7 @@ function concatBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
 
 class StatusUpstreamRefreshCacheKey extends Data.Class<StatusUpstreamRefreshCacheKeyFields> {}
 
-interface ExecuteGitOptions {
+export interface ExecuteGitOptions {
   timeoutMs?: number | null | undefined;
   allowNonZeroExit?: boolean | undefined;
   fallbackErrorMessage?: string | undefined;
@@ -3476,6 +3480,42 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         return { commits: parseRecentCommitLines(result.stdout) };
       });
 
+    const commitActionFailure = (
+      operation: string,
+      cwd: string,
+      args: ReadonlyArray<string>,
+      stderr: string,
+      fallback: string,
+    ) => {
+      const detail = stderr.trim();
+      return createGitCommandError(operation, cwd, args, detail.length > 0 ? detail : fallback);
+    };
+    const assertUsableRefName = (cwd: string, kind: "branch" | "tag", name: string) =>
+      Effect.gen(function* () {
+        const operation = `GitCore.assertUsableRefName.${kind}`;
+        const fullRef = kind === "branch" ? `refs/heads/${name}` : `refs/tags/${name}`;
+        const checkArgs = ["check-ref-format", fullRef];
+        const invalidNameError = () =>
+          createGitCommandError(
+            operation,
+            cwd,
+            checkArgs,
+            `"${name}" is not a valid ${kind} name.`,
+          );
+        // A leading dash is a valid ref component, but `git switch -c -foo` would read
+        // it as an option, so reject it before any command sees it.
+        if (name.startsWith("-")) {
+          return yield* invalidNameError();
+        }
+        const result = yield* executeGit(operation, cwd, checkArgs, {
+          timeoutMs: 5_000,
+          allowNonZeroExit: true,
+        });
+        if (result.code !== 0) {
+          return yield* invalidNameError();
+        }
+      });
+
     const createWorktree: GitCoreShape["createWorktree"] = (input) =>
       Effect.gen(function* () {
         const targetBranch = input.newBranch ?? input.branch;
@@ -4344,12 +4384,32 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const createBranch: GitCoreShape["createBranch"] = (input) =>
       Effect.gen(function* () {
-        yield* executeGit("GitCore.createBranch", input.cwd, ["branch", input.branch], {
-          timeoutMs: 10_000,
+        const branch = input.branch.trim();
+        yield* assertUsableRefName(input.cwd, "branch", branch);
+        const startPoint =
+          input.startPoint === undefined
+            ? null
+            : yield* resolveCommitObjectId(input.cwd, input.startPoint, "GitCore.createBranch");
+        const args =
+          input.checkout === true
+            ? ["switch", "-c", branch, ...(startPoint ? [startPoint] : [])]
+            : ["branch", "--", branch, ...(startPoint ? [startPoint] : [])];
+        const result = yield* executeGit("GitCore.createBranch", input.cwd, args, {
+          timeoutMs: 30_000,
+          allowNonZeroExit: true,
           fallbackErrorMessage: "git branch create failed",
         });
+        if (result.code !== 0) {
+          return yield* commitActionFailure(
+            "GitCore.createBranch",
+            input.cwd,
+            args,
+            result.stderr,
+            "git branch create failed",
+          );
+        }
         if (input.publish === true) {
-          yield* publishBranch({ cwd: input.cwd, branch: input.branch });
+          yield* publishBranch({ cwd: input.cwd, branch });
         }
       }).pipe(Effect.asVoid);
 
@@ -4684,6 +4744,20 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         );
       });
 
+    const historyOps = makeGitHistoryOps({
+      executeGit,
+      resolveCommitObjectId,
+      commitActionFailure,
+      assertUsableRefName,
+      checkoutBranch,
+      deleteBranch,
+      resolvePushRemoteName,
+      createGitCommandError,
+      parseDirtyWorktreeFiles,
+      isMissingGitCwdError,
+      mutationOptions: GIT_MUTATION_OPTIONS,
+    });
+
     return {
       withMutation,
       execute,
@@ -4707,6 +4781,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       readConfigValue,
       listBranches,
       listRecentCommits,
+      ...historyOps,
       createWorktree,
       recordWorktreeOwnership,
       verifyWorktreeOwnership,

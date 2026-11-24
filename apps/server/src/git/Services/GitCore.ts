@@ -13,8 +13,18 @@ import type {
   GitReadFileAtRevInput,
   GitReadFileAtRevResult,
   GitBlameLineResult,
+  GitCheckoutCommitInput,
   GitCheckoutInput,
+  GitCheckoutRemoteBranchInput,
+  GitCheckoutRemoteBranchResult,
+  GitCherryPickCommitInput,
+  GitCommitActionResult,
   GitCreateBranchInput,
+  GitCreateTagInput,
+  GitCreateTagResult,
+  GitDeleteBranchRefInput,
+  GitDeleteRefResult,
+  GitDeleteTagRefInput,
   GitCreateDetachedWorktreeInput,
   GitWorktreeSetupPhase,
   GitCreateDetachedWorktreeResult,
@@ -23,8 +33,13 @@ import type {
   GitInitInput,
   GitListBranchesInput,
   GitListBranchesResult,
+  GitListCommitHistoryInput,
+  GitListCommitHistoryResult,
   GitListRecentCommitsInput,
   GitListRecentCommitsResult,
+  GitReadCommitDiffInput,
+  GitReadCommitDiffResult,
+  GitRevertCommitInput,
   GitPullResult,
   GitRemoveIndexLockInput,
   GitRemoveWorktreeInput,
@@ -344,6 +359,59 @@ export interface GitCoreShape {
   readonly listRecentCommits: (
     input: GitListRecentCommitsInput,
   ) => Effect.Effect<GitListRecentCommitsResult, GitCommandError>;
+
+  /**
+   * Page through `git log` for the commit graph, with parents and ref decorations.
+   */
+  readonly listCommitHistory: (
+    input: GitListCommitHistoryInput,
+  ) => Effect.Effect<GitListCommitHistoryResult, GitCommandError>;
+
+  /**
+   * Read one commit's metadata and its patch (against the first parent for merges).
+   */
+  readonly readCommitDiff: (
+    input: GitReadCommitDiffInput,
+  ) => Effect.Effect<GitReadCommitDiffResult, GitCommandError>;
+
+  /** Fetch a remote branch, fast-forward or create its local branch, then check it out. */
+  readonly checkoutRemoteBranch: (
+    input: GitCheckoutRemoteBranchInput,
+  ) => Effect.Effect<
+    GitCheckoutRemoteBranchResult,
+    GitCommandError | GitCheckoutDirtyWorktreeError,
+    Scope.Scope
+  >;
+
+  /** Detach HEAD at a commit. */
+  readonly checkoutCommit: (
+    input: GitCheckoutCommitInput,
+  ) => Effect.Effect<void, GitCommandError | GitCheckoutDirtyWorktreeError>;
+
+  /** Apply one commit onto the current HEAD as a new commit. */
+  readonly cherryPickCommit: (
+    input: GitCherryPickCommitInput,
+  ) => Effect.Effect<GitCommitActionResult, GitCommandError>;
+
+  /** Create a commit that undoes one commit on the current HEAD. */
+  readonly revertCommit: (
+    input: GitRevertCommitInput,
+  ) => Effect.Effect<GitCommitActionResult, GitCommandError>;
+
+  /** Create a lightweight or annotated tag pointing at a commit. */
+  readonly createTag: (
+    input: GitCreateTagInput,
+  ) => Effect.Effect<GitCreateTagResult, GitCommandError>;
+
+  /** Delete a local branch, optionally also deleting its remote counterpart. */
+  readonly deleteBranchRef: (
+    input: GitDeleteBranchRefInput,
+  ) => Effect.Effect<GitDeleteRefResult, GitCommandError>;
+
+  /** Delete a local tag, optionally also deleting it from the remote. */
+  readonly deleteTagRef: (
+    input: GitDeleteTagRefInput,
+  ) => Effect.Effect<GitDeleteRefResult, GitCommandError>;
 
   /**
    * Pull current branch from upstream using fast-forward only.

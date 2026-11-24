@@ -1250,6 +1250,748 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
+  // ── commit history ──
+
+  describe("commit history", () => {
+    const readHistory = (cwd: string, input: { limit?: number; skip?: number; ref?: string }) =>
+      Effect.gen(function* () {
+        return yield* (yield* GitCore).listCommitHistory({ cwd, ...input });
+      });
+
+    it.effect("returns newest-first commits with parents and head refs", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* commitWithDate(
+          tmp,
+          "second.txt",
+          "second\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "second commit",
+        );
+
+        const page = yield* readHistory(tmp, {});
+        expect(page.commits).toHaveLength(2);
+        expect(page.commits[0]?.subject).toBe("second commit");
+        expect(page.commits[0]?.parents).toEqual([page.commits[1]?.sha]);
+        expect(page.commits[1]?.parents).toEqual([]);
+        expect(page.commits[0]?.refs).toContainEqual({
+          name: "HEAD",
+          kind: "head",
+          checkedOut: false,
+        });
+        expect(page.commits[0]?.refs.some((ref) => ref.kind === "branch")).toBe(true);
+        expect(page.commits[0]?.authorName).toBe("Test");
+        expect(page.hasMore).toBe(false);
+      }),
+    );
+
+    it.effect("pages with skip and reports hasMore without dropping commits", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* commitWithDate(
+          tmp,
+          "second.txt",
+          "second\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "second commit",
+        );
+
+        const first = yield* readHistory(tmp, { limit: 1 });
+        expect(first.commits).toHaveLength(1);
+        expect(first.hasMore).toBe(true);
+
+        const second = yield* readHistory(tmp, { limit: 1, skip: 1 });
+        expect(second.commits).toHaveLength(1);
+        expect(second.commits[0]?.sha).not.toBe(first.commits[0]?.sha);
+        expect(second.hasMore).toBe(false);
+      }),
+    );
+
+    it.effect("restricts the walk to a requested branch", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* (yield* GitCore).createBranch({ cwd: tmp, branch: "side" });
+        yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "side" });
+        yield* commitWithDate(
+          tmp,
+          "side.txt",
+          "side\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "side commit",
+        );
+        yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: defaultBranch });
+
+        const defaultPage = yield* readHistory(tmp, { ref: defaultBranch });
+        const sidePage = yield* readHistory(tmp, { ref: "side" });
+
+        expect(defaultPage.commits.some((commit) => commit.subject === "side commit")).toBe(false);
+        expect(sidePage.commits[0]?.subject).toBe("side commit");
+      }),
+    );
+
+    it.effect("keeps Synara checkpoint snapshots out of the history", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["checkout", "-b", "snapshot-source"]);
+        yield* commitWithDate(
+          tmp,
+          "snapshot.txt",
+          "snapshot\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "checkpoint-only commit",
+        );
+        const snapshotSha = (yield* git(tmp, ["rev-parse", "HEAD"])).trim();
+        // A managed checkpoint ref keeps this commit alive without any branch.
+        yield* git(tmp, ["update-ref", "refs/synara/checkpoints/thread-token/turn/1", snapshotSha]);
+        yield* git(tmp, ["checkout", defaultBranch]);
+        yield* git(tmp, ["branch", "-D", "snapshot-source"]);
+
+        // The commit is reachable through --all; only the history filter hides it.
+        expect(yield* git(tmp, ["log", "--all", "--format=%s"])).toContain(
+          "checkpoint-only commit",
+        );
+
+        const page = yield* readHistory(tmp, {});
+        expect(page.commits.some((commit) => commit.subject === "checkpoint-only commit")).toBe(
+          false,
+        );
+      }),
+    );
+
+    it.effect("returns an empty page for a repository without commits", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithoutCommit(tmp);
+        const page = yield* readHistory(tmp, {});
+        expect(page).toEqual({ commits: [], hasMore: false });
+      }),
+    );
+
+    it.effect("keeps notes refs out of the history", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const head = (yield* git(tmp, ["rev-parse", "HEAD"])).trim();
+        // `git notes add` creates a commit on refs/notes/commits, which `--all` walks
+        // and would surface as an unrelated graph root.
+        yield* git(tmp, ["notes", "add", "-m", "Notes added by 'git notes add'", head]);
+        expect(yield* git(tmp, ["log", "--all", "--format=%s"])).toContain(
+          "Notes added by 'git notes add'",
+        );
+
+        const page = yield* readHistory(tmp, {});
+        expect(page.commits.some((commit) => commit.subject.includes("Notes added by"))).toBe(
+          false,
+        );
+        expect(page.commits.some((commit) => commit.subject === "initial commit")).toBe(true);
+      }),
+    );
+
+    it.effect("treats a directory that is not a repository as an empty page", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const page = yield* readHistory(tmp, {});
+        expect(page).toEqual({ commits: [], hasMore: false });
+      }),
+    );
+
+    it.effect("rejects an unknown ref instead of silently walking HEAD", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const error = yield* readHistory(tmp, { ref: "does-not-exist" }).pipe(Effect.flip);
+        expect(error).toBeInstanceOf(GitCommandError);
+      }),
+    );
+
+    it.effect("reads a commit patch and full message", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* commitWithDate(
+          tmp,
+          "second.txt",
+          "second line\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "second commit",
+        );
+        const history = yield* readHistory(tmp, { limit: 1 });
+        const sha = history.commits[0]!.sha;
+
+        const detail = yield* (yield* GitCore).readCommitDiff({ cwd: tmp, sha });
+        expect(detail.commit.sha).toBe(sha);
+        expect(detail.message).toBe("second commit");
+        expect(detail.patch).toContain("second.txt");
+        expect(detail.patch).toContain("+second line");
+        expect(detail.truncated).toBe(false);
+      }),
+    );
+
+    it.effect("reads a commit whose message exceeds the default output budget", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        // The message goes through a file: a 1 MB argument would exceed the OS
+        // argument-size limit before git ever runs.
+        const messageFile = path.join(tmp, "commit-message.txt");
+        yield* writeTextFile(messageFile, `big message commit\n\n${"x".repeat(1_200_000)}\n`);
+        yield* writeTextFile(path.join(tmp, "big-message.txt"), "big\n");
+        yield* git(tmp, ["add", "big-message.txt"]);
+        yield* git(tmp, ["commit", "-F", messageFile]);
+        const history = yield* readHistory(tmp, { limit: 1 });
+        const sha = history.commits[0]!.sha;
+
+        const detail = yield* (yield* GitCore).readCommitDiff({ cwd: tmp, sha });
+        expect(detail.commit.sha).toBe(sha);
+        expect(detail.commit.subject).toBe("big message commit");
+        expect(detail.message).toContain("big message commit");
+        expect(detail.patch).toContain("big-message.txt");
+      }),
+    );
+
+    it.effect("diffs a root commit against the empty tree", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const history = yield* readHistory(tmp, {});
+        const root = history.commits.at(-1)!;
+
+        const detail = yield* (yield* GitCore).readCommitDiff({ cwd: tmp, sha: root.sha });
+        expect(detail.patch).toContain("README.md");
+        expect(detail.patch).toContain("+# test");
+      }),
+    );
+
+    it.effect("diffs a merge commit against its first parent", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["checkout", "-b", "feature"]);
+        yield* commitWithDate(
+          tmp,
+          "feature.txt",
+          "feature\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "feature commit",
+        );
+        yield* git(tmp, ["checkout", defaultBranch]);
+        yield* commitWithDate(
+          tmp,
+          "main.txt",
+          "main\n",
+          "Fri, 1 Jan 2038 00:00:00 +0000",
+          "main commit",
+        );
+        yield* git(tmp, ["merge", "--no-ff", "-m", "merge feature", "feature"]);
+
+        const history = yield* readHistory(tmp, { limit: 1 });
+        const merge = history.commits[0]!;
+        expect(merge.parents).toHaveLength(2);
+
+        const detail = yield* (yield* GitCore).readCommitDiff({ cwd: tmp, sha: merge.sha });
+        expect(detail.patch).toContain("feature.txt");
+        expect(detail.patch).not.toContain("main.txt");
+      }),
+    );
+
+    it.effect("checks out a commit as a detached HEAD", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* commitWithDate(
+          tmp,
+          "second.txt",
+          "second\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "second commit",
+        );
+        const history = yield* readHistory(tmp, {});
+        const target = history.commits.at(-1)!;
+
+        yield* (yield* GitCore).checkoutCommit({ cwd: tmp, sha: target.sha });
+
+        expect((yield* git(tmp, ["rev-parse", "HEAD"])).trim()).toBe(target.sha);
+        expect((yield* git(tmp, ["branch", "--show-current"])).trim()).toBe("");
+      }),
+    );
+
+    it.effect("reports uncommitted changes that block checkout", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* commitWithDate(
+          tmp,
+          "tracked.txt",
+          "one\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "tracked",
+        );
+        const history = yield* readHistory(tmp, {});
+        const older = history.commits.at(-1)!;
+        yield* writeTextFile(path.join(tmp, "tracked.txt"), "dirty\n");
+
+        const error = yield* (yield* GitCore)
+          .checkoutCommit({ cwd: tmp, sha: older.sha })
+          .pipe(Effect.flip);
+        expect(error).toBeInstanceOf(GitCheckoutDirtyWorktreeError);
+      }),
+    );
+
+    it.effect("creates a branch at a commit and optionally checks it out", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* commitWithDate(
+          tmp,
+          "second.txt",
+          "second\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "second commit",
+        );
+        const history = yield* readHistory(tmp, {});
+        const older = history.commits.at(-1)!;
+
+        const created = yield* (yield* GitCore).createBranch({
+          cwd: tmp,
+          branch: "release/old",
+          startPoint: older.sha,
+          checkout: true,
+        });
+        expect(created).toBeUndefined();
+        expect((yield* git(tmp, ["branch", "--show-current"])).trim()).toBe("release/old");
+        expect((yield* git(tmp, ["rev-parse", "HEAD"])).trim()).toBe(older.sha);
+      }),
+    );
+
+    it.effect("rejects an invalid branch name", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const history = yield* readHistory(tmp, { limit: 1 });
+
+        const error = yield* (yield* GitCore)
+          .createBranch({
+            cwd: tmp,
+            startPoint: history.commits[0]!.sha,
+            branch: "bad..name",
+          })
+          .pipe(Effect.flip);
+        expect(error).toBeInstanceOf(GitCommandError);
+      }),
+    );
+
+    it.effect("cherry-picks and reverts a commit on the current branch", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["checkout", "-b", "feature"]);
+        yield* commitWithDate(
+          tmp,
+          "feature.txt",
+          "feature\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "feature commit",
+        );
+        const featureSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["checkout", defaultBranch]);
+
+        const picked = yield* (yield* GitCore).cherryPickCommit({
+          cwd: tmp,
+          sha: featureSha.trim(),
+        });
+        expect(picked.subject).toBe("feature commit");
+        expect(existsSync(path.join(tmp, "feature.txt"))).toBe(true);
+
+        const reverted = yield* (yield* GitCore).revertCommit({ cwd: tmp, sha: picked.commitSha });
+        expect(reverted.subject).toContain("Revert");
+        expect(existsSync(path.join(tmp, "feature.txt"))).toBe(false);
+      }),
+    );
+
+    it.effect("creates tags that show up as decorations in history", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const history = yield* readHistory(tmp, { limit: 1 });
+        const sha = history.commits[0]!.sha;
+
+        yield* (yield* GitCore).createTag({
+          cwd: tmp,
+          sha,
+          name: "v1.0.0",
+          message: "first release",
+        });
+        yield* (yield* GitCore).createTag({ cwd: tmp, sha, name: "lightweight" });
+
+        const refreshed = yield* readHistory(tmp, { limit: 1 });
+        expect(refreshed.commits[0]?.refs).toContainEqual({
+          name: "v1.0.0",
+          kind: "tag",
+          checkedOut: false,
+        });
+        expect(refreshed.commits[0]?.refs).toContainEqual({
+          name: "lightweight",
+          kind: "tag",
+          checkedOut: false,
+        });
+        expect((yield* git(tmp, ["cat-file", "-t", "v1.0.0"])).trim()).toBe("tag");
+      }),
+    );
+  });
+
+  describe("checkoutRemoteBranch", () => {
+    const cloneRepo = (sourceCwd: string) =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const clone = yield* makeTmpDir();
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(sourceCwd, ["remote", "add", "origin", remote]);
+        yield* git(sourceCwd, ["push", "-u", "origin", "HEAD"]);
+        yield* git(sourceCwd, ["push", "origin", "HEAD:refs/heads/main"]);
+        yield* git(sourceCwd, ["fetch", "origin"]);
+        // The bare remote's default HEAD is the source's initial branch name; point
+        // it at the branch we pushed so the clone has a checked-out HEAD.
+        yield* git(remote, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+        yield* git(clone, ["clone", remote, "."]);
+        yield* git(clone, ["config", "user.email", "test@test.com"]);
+        yield* git(clone, ["config", "user.name", "Test"]);
+        const cloneDefaultBranch = yield* currentBranchName(clone);
+        return { remote, clone, cloneDefaultBranch };
+      });
+
+    it.effect("creates and checks out a tracking branch when no local branch exists", () =>
+      Effect.gen(function* () {
+        const source = yield* makeTmpDir();
+        yield* initRepoWithCommit(source);
+        yield* git(source, ["checkout", "-b", "feature/remote-only"]);
+        yield* commitWithDate(
+          source,
+          "remote-only.txt",
+          "remote\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "remote-only commit",
+        );
+        const { clone } = yield* cloneRepo(source);
+
+        const result = yield* (yield* GitCore)
+          .checkoutRemoteBranch({ cwd: clone, remoteBranch: "origin/feature/remote-only" })
+          .pipe(Effect.scoped);
+
+        expect(result).toEqual({ branch: "feature/remote-only", created: true, updated: true });
+        expect((yield* git(clone, ["branch", "--show-current"])).trim()).toBe(
+          "feature/remote-only",
+        );
+      }),
+    );
+
+    it.effect("fast-forwards an existing local branch before checking it out", () =>
+      Effect.gen(function* () {
+        const source = yield* makeTmpDir();
+        yield* initRepoWithCommit(source);
+        yield* git(source, ["checkout", "-b", "feature/ff"]);
+        yield* commitWithDate(
+          source,
+          "ff-1.txt",
+          "one\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "first",
+        );
+        const { clone, cloneDefaultBranch } = yield* cloneRepo(source);
+        yield* (yield* GitCore)
+          .checkoutRemoteBranch({ cwd: clone, remoteBranch: "origin/feature/ff" })
+          .pipe(Effect.scoped);
+        yield* git(clone, ["checkout", cloneDefaultBranch]);
+
+        yield* commitWithDate(
+          source,
+          "ff-2.txt",
+          "two\n",
+          "Fri, 1 Jan 2038 00:00:00 +0000",
+          "second",
+        );
+        yield* git(source, ["push", "origin", "feature/ff"]);
+        const remoteHead = (yield* git(source, ["rev-parse", "HEAD"])).trim();
+
+        const result = yield* (yield* GitCore)
+          .checkoutRemoteBranch({ cwd: clone, remoteBranch: "origin/feature/ff" })
+          .pipe(Effect.scoped);
+
+        expect(result).toEqual({ branch: "feature/ff", created: false, updated: true });
+        expect((yield* git(clone, ["branch", "--show-current"])).trim()).toBe("feature/ff");
+        expect((yield* git(clone, ["rev-parse", "HEAD"])).trim()).toBe(remoteHead);
+      }),
+    );
+
+    it.effect("refuses a diverged local branch without changing the checkout", () =>
+      Effect.gen(function* () {
+        const source = yield* makeTmpDir();
+        yield* initRepoWithCommit(source);
+        yield* git(source, ["checkout", "-b", "feature/diverged"]);
+        yield* commitWithDate(
+          source,
+          "diverged.txt",
+          "remote\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "remote change",
+        );
+        const { clone } = yield* cloneRepo(source);
+        yield* (yield* GitCore)
+          .checkoutRemoteBranch({ cwd: clone, remoteBranch: "origin/feature/diverged" })
+          .pipe(Effect.scoped);
+
+        yield* commitWithDate(
+          clone,
+          "local.txt",
+          "local\n",
+          "Fri, 1 Jan 2038 00:00:00 +0000",
+          "local change",
+        );
+        const localHead = (yield* git(clone, ["rev-parse", "HEAD"])).trim();
+        yield* commitWithDate(
+          source,
+          "diverged-2.txt",
+          "remote two\n",
+          "Sat, 1 Jan 2039 00:00:00 +0000",
+          "remote change two",
+        );
+        yield* git(source, ["push", "origin", "feature/diverged"]);
+
+        const error = yield* (yield* GitCore)
+          .checkoutRemoteBranch({ cwd: clone, remoteBranch: "origin/feature/diverged" })
+          .pipe(Effect.scoped, Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+        expect((yield* git(clone, ["branch", "--show-current"])).trim()).toBe("feature/diverged");
+        expect((yield* git(clone, ["rev-parse", "HEAD"])).trim()).toBe(localHead);
+      }),
+    );
+
+    it.effect("rejects a remote-tracking branch whose name starts with a dash", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const error = yield* (yield* GitCore)
+          .checkoutRemoteBranch({ cwd: tmp, remoteBranch: "-origin/main" })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+      }),
+    );
+  });
+
+  describe("delete refs", () => {
+    it.effect("deletes a local branch and, on request, its remote counterpart", () =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const tmp = yield* makeTmpDir();
+        yield* git(remote, ["init", "--bare"]);
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["remote", "add", "origin", remote]);
+
+        yield* git(tmp, ["checkout", "-b", "feature/doomed"]);
+        yield* commitWithDate(
+          tmp,
+          "doomed.txt",
+          "doomed\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "doomed commit",
+        );
+        yield* git(tmp, ["push", "-u", "origin", "feature/doomed"]);
+        yield* git(tmp, ["checkout", defaultBranch]);
+
+        const result = yield* (yield* GitCore).deleteBranchRef({
+          cwd: tmp,
+          branch: "feature/doomed",
+          force: true,
+          deleteRemote: true,
+        });
+
+        expect(result.remoteName).toBe("origin");
+        expect(result.requiresForce).toBe(false);
+        expect(yield* git(tmp, ["branch", "--list", "feature/doomed"])).toBe("");
+        expect(yield* git(tmp, ["ls-remote", "--heads", "origin", "feature/doomed"])).toBe("");
+      }),
+    );
+
+    it.effect("plain-deletes a branch that is merged into HEAD", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["checkout", "-b", "feature/merged"]);
+        yield* writeTextFile(path.join(tmp, "merged.txt"), "merged\n");
+        yield* git(tmp, ["add", "merged.txt"]);
+        yield* git(tmp, ["commit", "-m", "merged commit"]);
+        yield* git(tmp, ["checkout", defaultBranch]);
+        yield* git(tmp, ["merge", "--ff-only", "feature/merged"]);
+
+        const result = yield* (yield* GitCore).deleteBranchRef({
+          cwd: tmp,
+          branch: "feature/merged",
+        });
+
+        expect(result.requiresForce).toBe(false);
+        expect(yield* git(tmp, ["branch", "--list", "feature/merged"])).toBe("");
+      }),
+    );
+
+    it.effect("refuses a plain delete of an unmerged branch and finishes with force", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["checkout", "-b", "feature/unmerged"]);
+        yield* commitWithDate(
+          tmp,
+          "unmerged.txt",
+          "unmerged\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "unmerged commit",
+        );
+        yield* git(tmp, ["checkout", defaultBranch]);
+
+        // `git branch -d` refuses here. A plain delete must not drop the commits; it
+        // reports that force is needed and leaves the branch in place.
+        const refused = yield* (yield* GitCore).deleteBranchRef({
+          cwd: tmp,
+          branch: "feature/unmerged",
+        });
+        expect(refused.requiresForce).toBe(true);
+        expect(yield* git(tmp, ["branch", "--list", "feature/unmerged"])).not.toBe("");
+
+        const forced = yield* (yield* GitCore).deleteBranchRef({
+          cwd: tmp,
+          branch: "feature/unmerged",
+          force: true,
+        });
+        expect(forced.requiresForce).toBe(false);
+        expect(yield* git(tmp, ["branch", "--list", "feature/unmerged"])).toBe("");
+      }),
+    );
+
+    it.effect("rejects a dash-prefixed branch name before any git command sees it", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const error = yield* (yield* GitCore)
+          .deleteBranchRef({ cwd: tmp, branch: "-delete-me" })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+      }),
+    );
+
+    it.effect("deletes an unmerged branch whose content already matches HEAD", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        // An empty commit makes the branch unmerged without changing its tree, which
+        // is how a branch created at a snapshot commit of the same state looks.
+        yield* git(tmp, ["checkout", "-b", "feature/duplicate"]);
+        yield* git(tmp, ["commit", "--allow-empty", "-m", "duplicate state"]);
+        yield* git(tmp, ["checkout", defaultBranch]);
+
+        const result = yield* (yield* GitCore).deleteBranchRef({
+          cwd: tmp,
+          branch: "feature/duplicate",
+        });
+        expect(result.requiresForce).toBe(false);
+        expect(yield* git(tmp, ["branch", "--list", "feature/duplicate"])).toBe("");
+      }),
+    );
+
+    it.effect("honours an explicit force delete", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["checkout", "-b", "feature/forced"]);
+        yield* writeTextFile(path.join(tmp, "forced.txt"), "forced\n");
+        yield* git(tmp, ["add", "forced.txt"]);
+        yield* git(tmp, ["commit", "-m", "forced commit"]);
+        yield* git(tmp, ["checkout", defaultBranch]);
+
+        const result = yield* (yield* GitCore).deleteBranchRef({
+          cwd: tmp,
+          branch: "feature/forced",
+          force: true,
+        });
+        expect(result.requiresForce).toBe(false);
+        expect(yield* git(tmp, ["branch", "--list", "feature/forced"])).toBe("");
+      }),
+    );
+
+    it.effect("names the half-done state when the remote deletion fails", () =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const tmp = yield* makeTmpDir();
+        yield* git(remote, ["init", "--bare"]);
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["remote", "add", "origin", remote]);
+        yield* git(tmp, ["checkout", "-b", "feature/partial"]);
+        yield* commitWithDate(
+          tmp,
+          "partial.txt",
+          "partial\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "partial commit",
+        );
+        yield* git(tmp, ["push", "-u", "origin", "feature/partial"]);
+        yield* git(tmp, ["checkout", defaultBranch]);
+
+        // Point the remote at a path that is not a repository so the push fails after
+        // the local branch is already gone. The path is never created, so test cleanup
+        // has nothing to remove.
+        yield* git(tmp, ["remote", "set-url", "origin", path.join(tmp, "missing-remote.git")]);
+
+        const error = yield* (yield* GitCore)
+          .deleteBranchRef({ cwd: tmp, branch: "feature/partial", force: true, deleteRemote: true })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+        expect(error.message).toContain("already deleted");
+        expect(yield* git(tmp, ["branch", "--list", "feature/partial"])).toBe("");
+      }),
+    );
+
+    it.effect("deletes a tag and, on request, the remote tag", () =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const tmp = yield* makeTmpDir();
+        yield* git(remote, ["init", "--bare"]);
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["remote", "add", "origin", remote]);
+        yield* git(tmp, ["push", "-u", "origin", defaultBranch]);
+        yield* git(tmp, ["tag", "v9.9.9"]);
+        yield* git(tmp, ["push", "origin", "v9.9.9"]);
+
+        const result = yield* (yield* GitCore).deleteTagRef({
+          cwd: tmp,
+          name: "v9.9.9",
+          deleteRemote: true,
+        });
+
+        expect(result.remoteName).toBe("origin");
+        expect(yield* git(tmp, ["tag", "--list", "v9.9.9"])).toBe("");
+        expect(yield* git(tmp, ["ls-remote", "--tags", "origin", "v9.9.9"])).toBe("");
+      }),
+    );
+  });
+
   // ── checkoutGitBranch ──
 
   describe("checkoutGitBranch", () => {

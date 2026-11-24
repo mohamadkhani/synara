@@ -19,6 +19,11 @@ describe("wsRequestClass", () => {
     expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.replayEvents)).toBe("expensive-read");
     expect(classifyWsRequest(WS_METHODS.statsGetUsageAnalytics)).toBe("expensive-read");
     expect(classifyWsRequest(WS_METHODS.gitListBranches)).toBe("standard");
+    // History and commit-diff reads share the standard budget: the pane fires
+    // them alongside the two expensive stats reads, which already use it up.
+    expect(classifyWsRequest(WS_METHODS.gitListCommitHistory)).toBe("standard");
+    expect(classifyWsRequest(WS_METHODS.gitReadCommitDiff)).toBe("standard");
+    expect(classifyWsRequest(WS_METHODS.gitWorkingTreeDiffStats)).toBe("expensive-read");
   });
 
   it("builds the retryable capacity rejection clients depend on", () => {
