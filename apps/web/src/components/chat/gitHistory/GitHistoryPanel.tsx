@@ -599,7 +599,7 @@ function renderCommitRow(input: {
 }) {
   const committedAt = input.commit.committedAt;
   const timeLabel = formatHistoryTimestamp(committedAt, input.timestampFormat);
-  const dateTimeLabel = `${formatShortDateTimestamp(committedAt, input.timestampFormat)} ${formatShortTimestamp(committedAt, input.timestampFormat)}`;
+  const dateTimeLabel = formatShortDateTimestamp(committedAt, input.timestampFormat);
   if (input.isSearching || input.row === undefined) {
     return (
       <GitCommitFlatRow

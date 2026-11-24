@@ -22,7 +22,7 @@ import {
   Minimize2,
   TagIcon,
 } from "~/lib/icons";
-import { formatShortDateTimestamp, formatShortTimestamp } from "~/timestampFormat";
+import { formatShortDateTimestamp } from "~/timestampFormat";
 import { useTranslation } from "~/i18n";
 import { PanelStateMessage } from "../PanelStateMessage";
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
@@ -151,8 +151,7 @@ export function GitCommitDetail(props: {
             ) : null}
             {committedAt ? (
               <span className="tabular-nums">
-                {formatShortDateTimestamp(committedAt, settings.timestampFormat)}{" "}
-                {formatShortTimestamp(committedAt, settings.timestampFormat)}
+                {formatShortDateTimestamp(committedAt, settings.timestampFormat)}
               </span>
             ) : null}
             {files.length > 0 ? (
