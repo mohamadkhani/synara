@@ -3,7 +3,7 @@
 //          description, field body, an error line, and a cancel/confirm footer.
 // Layer: Git history UI
 
-import type { ComponentProps, ReactNode } from "react";
+import { useId, type ComponentProps, type ReactNode } from "react";
 
 import { useTranslation } from "~/i18n";
 import { Button } from "../../ui/button";
@@ -34,6 +34,9 @@ export function GitHistoryFormDialog(props: {
   children: ReactNode;
 }) {
   const { t } = useTranslation();
+  // Submit button lives in the footer, outside the form element, so it targets the
+  // form by id (Enter still submits from a text field).
+  const formId = useId();
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogPopup className="max-w-md">
@@ -41,38 +44,43 @@ export function GitHistoryFormDialog(props: {
           <DialogTitle>{props.title}</DialogTitle>
           <DialogDescription>{props.description}</DialogDescription>
         </DialogHeader>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            props.onSubmit();
-          }}
-        >
-          <DialogPanel className="flex flex-col gap-3">
+        {/* The dialog popup is a flex column that sizes the panel and footer as its
+            own children; wrapping them in a form made the footer escape the card. */}
+        <DialogPanel className="flex flex-col gap-3">
+          <form
+            id={formId}
+            className="flex flex-col gap-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              props.onSubmit();
+            }}
+          >
             {props.children}
             {props.error ? (
               <p role="alert" className="text-ui-sm text-destructive">
                 {props.error}
               </p>
             ) : null}
-          </DialogPanel>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => props.onOpenChange(false)}
-              disabled={props.pending}
-            >
-              {t("common:form_cancel")}
-            </Button>
-            <Button
-              type="submit"
-              {...(props.confirmVariant ? { variant: props.confirmVariant } : {})}
-              disabled={props.pending || props.submitDisabled === true}
-            >
-              {props.confirmLabel}
-            </Button>
-          </DialogFooter>
-        </form>
+          </form>
+        </DialogPanel>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => props.onOpenChange(false)}
+            disabled={props.pending}
+          >
+            {t("common:form_cancel")}
+          </Button>
+          <Button
+            type="submit"
+            form={formId}
+            {...(props.confirmVariant ? { variant: props.confirmVariant } : {})}
+            disabled={props.pending || props.submitDisabled === true}
+          >
+            {props.confirmLabel}
+          </Button>
+        </DialogFooter>
       </DialogPopup>
     </Dialog>
   );
