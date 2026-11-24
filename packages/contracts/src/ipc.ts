@@ -179,8 +179,23 @@ import type {
   GitInitInput,
   GitListBranchesInput,
   GitListBranchesResult,
+  GitListCommitHistoryInput,
+  GitListCommitHistoryResult,
   GitListRecentCommitsInput,
   GitListRecentCommitsResult,
+  GitCheckoutCommitInput,
+  GitCheckoutRemoteBranchInput,
+  GitCheckoutRemoteBranchResult,
+  GitCherryPickCommitInput,
+  GitCommitActionResult,
+  GitCreateTagInput,
+  GitCreateTagResult,
+  GitDeleteBranchRefInput,
+  GitDeleteRefResult,
+  GitDeleteTagRefInput,
+  GitReadCommitDiffInput,
+  GitReadCommitDiffResult,
+  GitRevertCommitInput,
   GitPullInput,
   GitPullResult,
   GitBlameLineInput,
@@ -1345,6 +1360,17 @@ export interface NativeApi {
     githubRepository: (input: GitHubRepositoryInput) => Promise<GitHubRepositoryResult>;
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;
     listRecentCommits: (input: GitListRecentCommitsInput) => Promise<GitListRecentCommitsResult>;
+    listCommitHistory: (input: GitListCommitHistoryInput) => Promise<GitListCommitHistoryResult>;
+    readCommitDiff: (input: GitReadCommitDiffInput) => Promise<GitReadCommitDiffResult>;
+    checkoutCommit: (input: GitCheckoutCommitInput) => Promise<void>;
+    checkoutRemoteBranch: (
+      input: GitCheckoutRemoteBranchInput,
+    ) => Promise<GitCheckoutRemoteBranchResult>;
+    cherryPickCommit: (input: GitCherryPickCommitInput) => Promise<GitCommitActionResult>;
+    revertCommit: (input: GitRevertCommitInput) => Promise<GitCommitActionResult>;
+    createTag: (input: GitCreateTagInput) => Promise<GitCreateTagResult>;
+    deleteBranchRef: (input: GitDeleteBranchRefInput) => Promise<GitDeleteRefResult>;
+    deleteTagRef: (input: GitDeleteTagRefInput) => Promise<GitDeleteRefResult>;
     createWorktree: (input: GitCreateWorktreeInput) => Promise<GitCreateWorktreeResult>;
     createDetachedWorktree: (
       input: GitCreateDetachedWorktreeInput,

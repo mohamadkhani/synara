@@ -75,6 +75,37 @@ export const GitRecentCommit = Schema.Struct({
 });
 export type GitRecentCommit = typeof GitRecentCommit.Type;
 
+// Decoration attached to a commit row. `head` marks the checked-out commit itself
+// (detached or attached); `branch`/`remote`/`tag` carry the short ref name so the
+// history view can render colored badges without a second refs read.
+export const GitCommitRefKind = Schema.Literals(["head", "branch", "remote", "tag"]);
+export type GitCommitRefKind = typeof GitCommitRefKind.Type;
+
+export const GitCommitRef = Schema.Struct({
+  name: TrimmedNonEmptyStringSchema,
+  kind: GitCommitRefKind,
+  /**
+   * True only for the local branch HEAD points at. Recorded by the parser so the
+   * UI never has to infer "checked out" from decoration ordering.
+   */
+  checkedOut: Schema.Boolean,
+});
+export type GitCommitRef = typeof GitCommitRef.Type;
+
+export const GitHistoryCommit = Schema.Struct({
+  sha: TrimmedNonEmptyStringSchema,
+  shortSha: TrimmedNonEmptyStringSchema,
+  // Parent object ids in `%P` order. The first parent is the branch-advancing
+  // parent; extra parents make this a merge commit.
+  parents: Schema.Array(TrimmedNonEmptyStringSchema),
+  subject: Schema.String,
+  authorName: Schema.String,
+  authorEmail: Schema.String,
+  committedAt: Schema.String,
+  refs: Schema.Array(GitCommitRef),
+});
+export type GitHistoryCommit = typeof GitHistoryCommit.Type;
+
 const GitWorktree = Schema.Struct({
   path: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
@@ -270,6 +301,115 @@ export const GitListRecentCommitsInput = Schema.Struct({
 });
 export type GitListRecentCommitsInput = typeof GitListRecentCommitsInput.Type;
 
+export const DEFAULT_GIT_COMMIT_HISTORY_LIMIT = 100;
+// The history view pages `git log`; cap one page so a client cannot ask for an
+// unbounded walk on a large monorepo.
+export const MAX_GIT_COMMIT_HISTORY_LIMIT = 200;
+
+export const GitListCommitHistoryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_GIT_COMMIT_HISTORY_LIMIT)),
+  ).pipe(Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_COMMIT_HISTORY_LIMIT))),
+  // Offset into the same order the server walks, used for paging. Zero means the
+  // first page; the UI only ever advances by `limit`.
+  skip: Schema.optional(NonNegativeInt).pipe(Schema.withConstructorDefault(() => Option.some(0))),
+  // Restrict the walk to one revision (a branch, remote branch, tag, or commit).
+  // Missing means every ref, matching how a commit graph is usually browsed.
+  ref: Schema.optional(GitRevisionArgumentSchema),
+});
+export type GitListCommitHistoryInput = typeof GitListCommitHistoryInput.Type;
+
+export const GitListCommitHistoryResult = Schema.Struct({
+  commits: Schema.Array(GitHistoryCommit),
+  hasMore: Schema.Boolean,
+});
+export type GitListCommitHistoryResult = typeof GitListCommitHistoryResult.Type;
+
+export const GitReadCommitDiffInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  sha: GitRevisionArgumentSchema,
+});
+export type GitReadCommitDiffInput = typeof GitReadCommitDiffInput.Type;
+
+export const GitReadCommitDiffResult = Schema.Struct({
+  // The resolved commit, including decorations, so a deep-linked or reloaded
+  // detail view does not depend on the list page that happened to load it.
+  commit: GitHistoryCommit,
+  // Full commit message; `commit.subject` is its first line.
+  message: Schema.String,
+  patch: Schema.String,
+  truncated: Schema.Boolean,
+});
+export type GitReadCommitDiffResult = typeof GitReadCommitDiffResult.Type;
+
+export const GitCheckoutCommitInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  sha: GitRevisionArgumentSchema,
+});
+export type GitCheckoutCommitInput = typeof GitCheckoutCommitInput.Type;
+
+export const GitCherryPickCommitInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  sha: GitRevisionArgumentSchema,
+});
+export type GitCherryPickCommitInput = typeof GitCherryPickCommitInput.Type;
+
+export const GitRevertCommitInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  sha: GitRevisionArgumentSchema,
+});
+export type GitRevertCommitInput = typeof GitRevertCommitInput.Type;
+
+// Cherry-pick and revert create a new commit; returning its id and subject lets
+// the UI confirm what landed without re-reading the log.
+export const GitCommitActionResult = Schema.Struct({
+  commitSha: TrimmedNonEmptyStringSchema,
+  subject: Schema.String,
+});
+export type GitCommitActionResult = typeof GitCommitActionResult.Type;
+
+export const GitDeleteBranchRefInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  branch: TrimmedNonEmptyStringSchema,
+  // Force deletion allows an unmerged branch; the UI only asks for it after the
+  // plain delete fails.
+  force: Schema.optional(Schema.Boolean),
+  deleteRemote: Schema.optional(Schema.Boolean),
+});
+export type GitDeleteBranchRefInput = typeof GitDeleteBranchRefInput.Type;
+
+export const GitDeleteTagRefInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  name: TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(255)),
+  deleteRemote: Schema.optional(Schema.Boolean),
+});
+export type GitDeleteTagRefInput = typeof GitDeleteTagRefInput.Type;
+
+// The remote a deletion reached, or null when only the local ref was removed.
+export const GitDeleteRefResult = Schema.Struct({
+  remoteName: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  /**
+   * True when a plain branch delete was refused because the branch has commits not
+   * merged into HEAD; nothing was deleted. The client confirms the consequence and
+   * retries with `force: true`.
+   */
+  requiresForce: Schema.optional(Schema.Boolean),
+});
+export type GitDeleteRefResult = typeof GitDeleteRefResult.Type;
+
+export const GitCreateTagInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  sha: GitRevisionArgumentSchema,
+  name: TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(255)),
+  // Present means an annotated tag; missing means a lightweight tag.
+  message: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000))),
+});
+export type GitCreateTagInput = typeof GitCreateTagInput.Type;
+
+export const GitCreateTagResult = Schema.Struct({ ok: Schema.Boolean });
+export type GitCreateTagResult = typeof GitCreateTagResult.Type;
+
 export const GitCreateWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
@@ -351,8 +491,27 @@ export const GitCreateBranchInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
   publish: Schema.optional(Schema.Boolean),
+  // Revision the new branch starts at; missing means the current HEAD.
+  startPoint: Schema.optional(GitRevisionArgumentSchema),
+  // When true the new branch is checked out immediately; missing keeps the current
+  // checkout on its HEAD and only creates the ref.
+  checkout: Schema.optional(Schema.Boolean),
 });
 export type GitCreateBranchInput = typeof GitCreateBranchInput.Type;
+
+export const GitCheckoutRemoteBranchInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  // Remote-tracking ref as shown in the graph, e.g. "origin/main".
+  remoteBranch: TrimmedNonEmptyStringSchema,
+});
+export type GitCheckoutRemoteBranchInput = typeof GitCheckoutRemoteBranchInput.Type;
+
+export const GitCheckoutRemoteBranchResult = Schema.Struct({
+  branch: TrimmedNonEmptyStringSchema,
+  created: Schema.Boolean,
+  updated: Schema.Boolean,
+});
+export type GitCheckoutRemoteBranchResult = typeof GitCheckoutRemoteBranchResult.Type;
 
 export const GitCheckoutInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,

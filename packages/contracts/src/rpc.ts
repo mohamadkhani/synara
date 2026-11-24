@@ -225,6 +225,21 @@ import {
 } from "./githubProjectProvisioning";
 import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import {
+  GitCheckoutCommitInput,
+  GitCheckoutRemoteBranchInput,
+  GitCheckoutRemoteBranchResult,
+  GitCherryPickCommitInput,
+  GitCommitActionResult,
+  GitCreateTagInput,
+  GitCreateTagResult,
+  GitDeleteBranchRefInput,
+  GitDeleteRefResult,
+  GitDeleteTagRefInput,
+  GitListCommitHistoryInput,
+  GitListCommitHistoryResult,
+  GitReadCommitDiffInput,
+  GitReadCommitDiffResult,
+  GitRevertCommitInput,
   GitCheckoutInput,
   GitActionProgressEvent,
   GitBlameLineInput,
@@ -1302,6 +1317,60 @@ export const WsGitListBranchesRpc = Rpc.make(WS_METHODS.gitListBranches, {
 export const WsGitListRecentCommitsRpc = Rpc.make(WS_METHODS.gitListRecentCommits, {
   payload: GitListRecentCommitsInput,
   success: GitListRecentCommitsResult,
+  error: WsRpcError,
+});
+
+export const WsGitListCommitHistoryRpc = Rpc.make(WS_METHODS.gitListCommitHistory, {
+  payload: GitListCommitHistoryInput,
+  success: GitListCommitHistoryResult,
+  error: WsRpcError,
+});
+
+export const WsGitReadCommitDiffRpc = Rpc.make(WS_METHODS.gitReadCommitDiff, {
+  payload: GitReadCommitDiffInput,
+  success: GitReadCommitDiffResult,
+  error: WsRpcError,
+});
+
+export const WsGitCheckoutRemoteBranchRpc = Rpc.make(WS_METHODS.gitCheckoutRemoteBranch, {
+  payload: GitCheckoutRemoteBranchInput,
+  success: GitCheckoutRemoteBranchResult,
+  error: WsRpcError,
+});
+
+export const WsGitCheckoutCommitRpc = Rpc.make(WS_METHODS.gitCheckoutCommit, {
+  payload: GitCheckoutCommitInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsGitCherryPickCommitRpc = Rpc.make(WS_METHODS.gitCherryPickCommit, {
+  payload: GitCherryPickCommitInput,
+  success: GitCommitActionResult,
+  error: WsRpcError,
+});
+
+export const WsGitRevertCommitRpc = Rpc.make(WS_METHODS.gitRevertCommit, {
+  payload: GitRevertCommitInput,
+  success: GitCommitActionResult,
+  error: WsRpcError,
+});
+
+export const WsGitCreateTagRpc = Rpc.make(WS_METHODS.gitCreateTag, {
+  payload: GitCreateTagInput,
+  success: GitCreateTagResult,
+  error: WsRpcError,
+});
+
+export const WsGitDeleteBranchRefRpc = Rpc.make(WS_METHODS.gitDeleteBranchRef, {
+  payload: GitDeleteBranchRefInput,
+  success: GitDeleteRefResult,
+  error: WsRpcError,
+});
+
+export const WsGitDeleteTagRefRpc = Rpc.make(WS_METHODS.gitDeleteTagRef, {
+  payload: GitDeleteTagRefInput,
+  success: GitDeleteRefResult,
   error: WsRpcError,
 });
 
@@ -2416,6 +2485,15 @@ export type WsFeatureRpc =
   | typeof WsPullRequestsSetAutoFixRpc
   | typeof WsGitListBranchesRpc
   | typeof WsGitListRecentCommitsRpc
+  | typeof WsGitListCommitHistoryRpc
+  | typeof WsGitReadCommitDiffRpc
+  | typeof WsGitCheckoutCommitRpc
+  | typeof WsGitCheckoutRemoteBranchRpc
+  | typeof WsGitCherryPickCommitRpc
+  | typeof WsGitRevertCommitRpc
+  | typeof WsGitCreateTagRpc
+  | typeof WsGitDeleteBranchRefRpc
+  | typeof WsGitDeleteTagRefRpc
   | typeof WsGitCreateWorktreeRpc
   | typeof WsGitCreateDetachedWorktreeRpc
   | typeof WsGitRemoveWorktreeRpc
@@ -2623,6 +2701,15 @@ const wsApplicationRpcGroup = RpcGroup.make(
   WsPullRequestsSetAutoFixRpc,
   WsGitListBranchesRpc,
   WsGitListRecentCommitsRpc,
+  WsGitListCommitHistoryRpc,
+  WsGitReadCommitDiffRpc,
+  WsGitCheckoutCommitRpc,
+  WsGitCheckoutRemoteBranchRpc,
+  WsGitCherryPickCommitRpc,
+  WsGitRevertCommitRpc,
+  WsGitCreateTagRpc,
+  WsGitDeleteBranchRefRpc,
+  WsGitDeleteTagRefRpc,
   WsGitCreateWorktreeRpc,
   WsGitCreateDetachedWorktreeRpc,
   WsGitRemoveWorktreeRpc,
