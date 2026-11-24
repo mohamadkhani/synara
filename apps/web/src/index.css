@@ -3262,6 +3262,11 @@ diffs-container {
 .diff-render-file [data-diff-file-header],
 .diff-render-file [data-file-info] {
   cursor: pointer;
+  /* The sticky header must paint over the diff gutter's change markers: those
+     markers are positioned, so without a stacking order the green line from a
+     scrolled row showed above the header band. */
+  z-index: 3;
+  background: var(--app-code-viewer-sticky-surface, var(--color-background-surface));
 }
 
 .diff-render-file__image-preview {
