@@ -145,6 +145,7 @@ export function GitWorkingTreeDetail(props: {
               ) : (
                 <PlusIcon className="size-3.5" />
               ),
+              pending: isStaged ? unstageMutation.isPending : stageMutation.isPending,
               onAction: runFileAction,
             }}
             onFileContextMenu={showFileContextMenu}

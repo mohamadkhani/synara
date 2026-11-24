@@ -62,7 +62,7 @@ function buildCurve(
 }
 
 const COMMIT_ROW_CLASS_NAME =
-  "@container flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md py-0 pl-1 pr-2 text-left";
+  "@container flex w-full min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-md py-0 pl-1 pr-2 text-left";
 
 /** Subject plus the author/time/short-sha column shared by graph and flat rows. */
 function CommitRowSummary(props: {

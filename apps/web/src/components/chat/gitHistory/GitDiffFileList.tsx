@@ -17,6 +17,7 @@ import { cn } from "~/lib/utils";
 import { useTranslation } from "~/i18n";
 import { Button } from "../../ui/button";
 import { IconButton } from "../../ui/icon-button";
+import { Spinner } from "../../ui/spinner";
 import { FileDiffBody, FileDiffSurface } from "../FileDiffView";
 import { FileDiffHeader } from "../FileDiffHeader";
 import { DiffStat } from "../DiffStatLabel";
@@ -72,6 +73,8 @@ export function GitDiffFileList(props: {
   fileAction?: {
     label: string;
     icon: ReactNode;
+    /** True while a stage/unstage mutation is in flight: the action shows a spinner. */
+    pending?: boolean;
     onAction: (fileDiff: FileDiffMetadata) => void;
   };
   onFileContextMenu?: (fileDiff: FileDiffMetadata, event: ReactMouseEvent) => void;
@@ -162,6 +165,8 @@ function CommitFileCard(props: {
   fileAction?: {
     label: string;
     icon: ReactNode;
+    /** True while a stage/unstage mutation is in flight: the action shows a spinner. */
+    pending?: boolean;
     onAction: (fileDiff: FileDiffMetadata) => void;
   };
   onFileContextMenu?: (fileDiff: FileDiffMetadata, event: ReactMouseEvent) => void;
@@ -225,9 +230,14 @@ function CommitFileCard(props: {
                     variant="ghost"
                     label={props.fileAction.label}
                     tooltip={props.fileAction.label}
+                    disabled={props.fileAction.pending === true}
                     onClick={() => props.fileAction?.onAction(props.fileDiff)}
                   >
-                    {props.fileAction.icon}
+                    {props.fileAction.pending ? (
+                      <Spinner aria-hidden className="size-3.5" />
+                    ) : (
+                      props.fileAction.icon
+                    )}
                   </IconButton>
                 </span>
               ) : null}

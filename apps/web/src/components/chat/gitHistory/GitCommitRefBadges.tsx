@@ -86,6 +86,9 @@ export function GitCommitRefBadges(props: {
             }
             className={cn(
               "inline-flex max-w-[8rem] shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-ui-xs font-medium",
+              // The chip is a right-click target; without this the pointer stays the
+              // text cursor over the label.
+              onRefContextMenu ? "cursor-pointer" : undefined,
               // Checked out is a filled accent chip, not a tinted outline: a 15% tint
               // looked identical to the plain branch chips on the dark surface.
               isHead || isCheckedOutBranch

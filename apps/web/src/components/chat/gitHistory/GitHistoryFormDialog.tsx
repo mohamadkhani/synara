@@ -7,6 +7,7 @@ import { useId, type ComponentProps, type ReactNode } from "react";
 
 import { useTranslation } from "~/i18n";
 import { Button } from "../../ui/button";
+import { Spinner } from "../../ui/spinner";
 import {
   Dialog,
   DialogDescription,
@@ -78,6 +79,7 @@ export function GitHistoryFormDialog(props: {
             {...(props.confirmVariant ? { variant: props.confirmVariant } : {})}
             disabled={props.pending || props.submitDisabled === true}
           >
+            {props.pending ? <Spinner aria-hidden className="size-3.5" /> : null}
             {props.confirmLabel}
           </Button>
         </DialogFooter>
