@@ -121,23 +121,31 @@ export function GitDiffFileList(props: {
         </div>
       </div>
       {props.header}
-      <FileDiffSurface className="h-full min-h-0 flex-1 overflow-auto px-2 py-2">
-        <div className="flex flex-col gap-2">
-          {files.map((fileDiff) => {
-            const filePath = resolveFileDiffPath(fileDiff);
-            return (
-              <CommitFileCard
-                key={`${buildFileDiffRenderKey(fileDiff)}:${props.theme}`}
-                fileDiff={fileDiff}
-                filePath={filePath}
-                theme={props.theme}
-                expanded={expandedPaths.has(filePath)}
-                onToggle={() => toggleFile(filePath)}
-                {...(props.fileAction ? { fileAction: props.fileAction } : {})}
-                {...(props.onFileContextMenu ? { onFileContextMenu: props.onFileContextMenu } : {})}
-              />
-            );
-          })}
+      <FileDiffSurface className="h-full min-h-0 flex-1 overflow-auto px-2 pb-2 pt-0">
+        {/* The scroll surface keeps no top padding: its inset moved to this inner
+            clipping box, whose rounded top corners match the cards and whose
+            `overflow: hidden` stops any scrolled row or change marker from painting
+            above a file header. */}
+        <div className="mt-2 overflow-hidden rounded-t-lg">
+          <div className="flex flex-col gap-2">
+            {files.map((fileDiff) => {
+              const filePath = resolveFileDiffPath(fileDiff);
+              return (
+                <CommitFileCard
+                  key={`${buildFileDiffRenderKey(fileDiff)}:${props.theme}`}
+                  fileDiff={fileDiff}
+                  filePath={filePath}
+                  theme={props.theme}
+                  expanded={expandedPaths.has(filePath)}
+                  onToggle={() => toggleFile(filePath)}
+                  {...(props.fileAction ? { fileAction: props.fileAction } : {})}
+                  {...(props.onFileContextMenu
+                    ? { onFileContextMenu: props.onFileContextMenu }
+                    : {})}
+                />
+              );
+            })}
+          </div>
         </div>
       </FileDiffSurface>
     </div>
