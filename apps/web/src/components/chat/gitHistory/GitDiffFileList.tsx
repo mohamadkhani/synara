@@ -17,7 +17,8 @@ import { cn } from "~/lib/utils";
 import { useTranslation } from "~/i18n";
 import { Button } from "../../ui/button";
 import { IconButton } from "../../ui/icon-button";
-import { FileDiffCard, FileDiffSurface } from "../FileDiffView";
+import { FileDiffBody, FileDiffSurface } from "../FileDiffView";
+import { FileDiffHeader } from "../FileDiffHeader";
 import { DiffStat } from "../DiffStatLabel";
 
 const FILE_STATUS_STYLES = {
@@ -122,11 +123,10 @@ export function GitDiffFileList(props: {
       </div>
       {props.header}
       <FileDiffSurface className="h-full min-h-0 flex-1 overflow-auto px-2 pb-2 pt-0">
-        {/* The scroll surface keeps no top padding: its inset moved to this inner
-            clipping box, whose rounded top corners match the cards and whose
-            `overflow: hidden` stops any scrolled row or change marker from painting
-            above a file header. */}
-        <div className="mt-2 overflow-hidden rounded-t-lg">
+        {/* Spacing only: an `overflow: hidden` wrapper here would become the sticky
+            containing block and stop the file headers from pinning. Each card clips
+            its own body instead. */}
+        <div className="mt-2">
           <div className="flex flex-col gap-2">
             {files.map((fileDiff) => {
               const filePath = resolveFileDiffPath(fileDiff);
@@ -208,48 +208,54 @@ function CommitFileCard(props: {
           : undefined
       }
     >
-      <FileDiffCard
-        fileDiff={props.fileDiff}
-        theme={props.theme}
-        collapsed={!props.expanded}
-        // A pinned header keeps its own scrolled rows visible above the header band
-        // when several files share one scroll surface; scrolling it with the card
-        // keeps the list readable.
-        stickyHeader={false}
-        renderHeaderTrailing={() => (
-          <span className="flex shrink-0 items-center gap-1.5">
-            {props.fileAction ? (
-              <span data-diff-header-control="true" className="inline-flex">
-                <IconButton
-                  size="icon-xs"
-                  variant="ghost"
-                  label={props.fileAction.label}
-                  tooltip={props.fileAction.label}
-                  onClick={() => props.fileAction?.onAction(props.fileDiff)}
-                >
-                  {props.fileAction.icon}
-                </IconButton>
+      {/* The header is ours and sticky with an opaque surface: the library pins its
+          own header inside the shadow tree, where the same file's rows could still
+          paint above it. The body renders without a library header, so rows can only
+          appear below the header band. */}
+      <div className="sticky top-0 z-30 bg-[var(--app-code-viewer-surface,var(--background))]">
+        <FileDiffHeader
+          fileDiff={props.fileDiff}
+          theme={props.theme}
+          trailing={
+            <span className="flex shrink-0 items-center gap-1.5">
+              {props.fileAction ? (
+                <span data-diff-header-control="true" className="inline-flex">
+                  <IconButton
+                    size="icon-xs"
+                    variant="ghost"
+                    label={props.fileAction.label}
+                    tooltip={props.fileAction.label}
+                    onClick={() => props.fileAction?.onAction(props.fileDiff)}
+                  >
+                    {props.fileAction.icon}
+                  </IconButton>
+                </span>
+              ) : null}
+              <span
+                title={t(FILE_STATUS_LABEL_KEYS[status])}
+                className={cn(
+                  "inline-flex size-4 items-center justify-center rounded border text-ui-xs font-semibold leading-none",
+                  FILE_STATUS_STYLES[status],
+                )}
+              >
+                {FILE_STATUS_LETTERS[status]}
               </span>
-            ) : null}
-            <span
-              title={t(FILE_STATUS_LABEL_KEYS[status])}
-              className={cn(
-                "inline-flex size-4 items-center justify-center rounded border text-ui-xs font-semibold leading-none",
-                FILE_STATUS_STYLES[status],
-              )}
-            >
-              {FILE_STATUS_LETTERS[status]}
+              <ChevronDownIcon
+                aria-hidden="true"
+                className={cn(
+                  "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                  props.expanded ? "" : "-rotate-90",
+                )}
+              />
             </span>
-            <ChevronDownIcon
-              aria-hidden="true"
-              className={cn(
-                "size-3.5 shrink-0 text-muted-foreground transition-transform",
-                props.expanded ? "" : "-rotate-90",
-              )}
-            />
-          </span>
-        )}
-      />
+          }
+        />
+      </div>
+      {props.expanded ? (
+        <div className="overflow-hidden">
+          <FileDiffBody fileDiff={props.fileDiff} theme={props.theme} />
+        </div>
+      ) : null}
     </div>
   );
 }

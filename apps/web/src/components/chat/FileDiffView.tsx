@@ -51,10 +51,6 @@ export function FileDiffCard(props: {
   diffStyle?: "unified" | "split";
   overflow?: "scroll" | "wrap";
   collapsed?: boolean;
-  /** The library pins the file header to the scrollport; callers that render many
-   *  files in one scroll surface can turn it off so a card's own rows never paint
-   *  above the header band. */
-  stickyHeader?: boolean;
   /** Trailing header chrome (actions menu, collapse chevron). */
   renderHeaderTrailing?: () => ReactNode;
   onLineClick?: ((line: DiffLineClickProps) => void) | undefined;
@@ -70,7 +66,6 @@ export function FileDiffCard(props: {
         themeType: props.theme,
         unsafeCSS: buildDiffPanelUnsafeCSS(props.theme),
         ...(props.collapsed !== undefined ? { collapsed: props.collapsed } : {}),
-        ...(props.stickyHeader !== undefined ? { stickyHeader: props.stickyHeader } : {}),
         ...(props.onLineClick ? { onLineClick: props.onLineClick } : {}),
       }}
       renderCustomHeader={(fileDiff) => (
@@ -80,6 +75,35 @@ export function FileDiffCard(props: {
           trailing={props.renderHeaderTrailing?.()}
         />
       )}
+    />
+  );
+}
+
+/**
+ * The patch body without the library's file header. Callers that render many files
+ * in one scroll surface draw their own sticky header and use this for the rows, so a
+ * pinned header can never leave the same file's rows painted above it.
+ */
+export function FileDiffBody(props: {
+  fileDiff: FileDiffMetadata;
+  theme: "light" | "dark";
+  diffStyle?: "unified" | "split";
+  overflow?: "scroll" | "wrap";
+  onLineClick?: ((line: DiffLineClickProps) => void) | undefined;
+}) {
+  return (
+    <FileDiff
+      fileDiff={props.fileDiff}
+      options={{
+        diffStyle: props.diffStyle ?? "unified",
+        lineDiffType: "word",
+        overflow: props.overflow ?? "scroll",
+        theme: resolveDiffThemeName(props.theme),
+        themeType: props.theme,
+        unsafeCSS: buildDiffPanelUnsafeCSS(props.theme),
+        disableFileHeader: true,
+        ...(props.onLineClick ? { onLineClick: props.onLineClick } : {}),
+      }}
     />
   );
 }
