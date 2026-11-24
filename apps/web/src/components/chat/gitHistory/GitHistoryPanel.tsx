@@ -184,7 +184,14 @@ export function GitHistoryPanel(props: {
     gitWorkingTreeDiffStatsQueryOptions({ cwd: viewCwd, scope: "unstaged" }),
   );
   const stagedStatsQuery = useQuery(
-    gitWorkingTreeDiffStatsQueryOptions({ cwd: viewCwd, scope: "staged" }),
+    gitWorkingTreeDiffStatsQueryOptions({
+      cwd: viewCwd,
+      scope: "staged",
+      // Serialize behind the unstaged read. Opening a working-tree detail adds a
+      // patch read, and three expensive reads at once exceed the connection's
+      // budget; two at a time always fits.
+      enabled: !unstagedStatsQuery.isPending,
+    }),
   );
   const unstagedStats = unstagedStatsQuery.data ?? null;
   const stagedStats = stagedStatsQuery.data ?? null;
