@@ -62,7 +62,7 @@ function buildCurve(
 }
 
 const COMMIT_ROW_CLASS_NAME =
-  "@container flex w-full min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-md py-0 pl-1 pr-2 text-left";
+  "@container flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md py-0 pl-1 pr-2 text-left";
 
 /** Subject plus the author/time/short-sha column shared by graph and flat rows. */
 function CommitRowSummary(props: {
@@ -285,6 +285,9 @@ export const GitWorkingTreeRow = memo(function GitWorkingTreeRow(props: {
       style={{ height: GIT_GRAPH_ROW_HEIGHT }}
       className={cn(
         COMMIT_ROW_CLASS_NAME,
+        // The working-tree rows are few and act like buttons; commit rows are a long
+        // list, where a pointer cursor on every row reads as noise.
+        "cursor-pointer",
         props.selected ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
       )}
     >
