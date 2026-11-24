@@ -185,7 +185,10 @@ function CommitFileCard(props: {
 
   return (
     <div
-      className="diff-render-file rounded-md"
+      // `contain: paint` clips the sticky file header's scrolling content to the card;
+      // with only `overflow: clip` the patch lines painted above the header, into the
+      // list gap and over the toolbar.
+      className="diff-render-file rounded-md [contain:paint]"
       data-diff-file-path={props.filePath}
       onClickCapture={handleClickCapture}
       onContextMenu={
