@@ -11,7 +11,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import { GitBranchIcon, GlobeIcon, TagIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useTranslation } from "~/i18n";
-import { resolveRefChipLabel } from "./gitRefChipLabel";
+import { dedupeRemoteRefs, resolveRefChipLabel } from "./gitRefChipLabel";
 
 const REF_KIND_PRIORITY: Record<GitHistoryCommit["refs"][number]["kind"], number> = {
   head: 0,
@@ -49,8 +49,11 @@ export function GitCommitRefBadges(props: {
   // branch chip carries the HEAD marker instead and detached HEAD keeps its own chip.
   // The parser records `checkedOut`, so this never depends on decoration order.
   const checkedOutBranch = commit.refs.find((ref) => ref.kind === "branch" && ref.checkedOut);
-  const ordered = orderRefsForDisplay(commit).filter(
-    (ref) => !(ref.kind === "head" && checkedOutBranch !== undefined),
+  const ordered = dedupeRemoteRefs(
+    orderRefsForDisplay(commit).filter(
+      (ref) => !(ref.kind === "head" && checkedOutBranch !== undefined),
+    ),
+    props.remoteNames ?? [],
   );
   const visible = ordered.slice(0, maxVisible);
 

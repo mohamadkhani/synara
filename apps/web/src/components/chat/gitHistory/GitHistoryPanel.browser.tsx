@@ -310,6 +310,55 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
+  it("shows a mirrored fork branch once and without the remote prefix", async () => {
+    harness.listBranches.mockResolvedValue({
+      branches: [
+        { name: "main", current: true, isDefault: true, worktreePath: null },
+        {
+          name: "origin/feature",
+          isRemote: true,
+          remoteName: "origin",
+          current: false,
+          isDefault: false,
+          worktreePath: null,
+        },
+        {
+          name: "fork/feature",
+          isRemote: true,
+          remoteName: "fork",
+          current: false,
+          isDefault: false,
+          worktreePath: null,
+        },
+      ],
+      isRepo: true,
+      hasOriginRemote: true,
+      remoteNames: ["origin", "fork"],
+    });
+    harness.listCommitHistory.mockResolvedValue({
+      commits: [
+        {
+          ...commit,
+          refs: [
+            { name: "origin/feature", kind: "remote", checkedOut: false },
+            { name: "fork/feature", kind: "remote", checkedOut: false },
+          ],
+        },
+        { ...commit, sha: "b".repeat(40), subject: "no refs", refs: [] },
+      ],
+      hasMore: false,
+    });
+    const screen = await mount();
+
+    const chip = page.getByTitle("Remote branch origin/feature");
+    await expect.element(chip).toBeVisible();
+    await expect.element(chip).toHaveTextContent("feature");
+    expect(chip.element().textContent).not.toContain("origin/");
+    // The mirrored fork branch is the same branch; it is not a second chip.
+    expect(page.getByTitle("Remote branch fork/feature").elements()).toHaveLength(0);
+    await screen.unmount();
+  });
+
   it("groups remote branches by namespace and filters them by name", async () => {
     harness.listBranches.mockResolvedValue({
       branches: [
