@@ -113,6 +113,30 @@ describe("layoutGitGraph", () => {
     expect(tipRow?.continuesFromAbove).toBe(true);
   });
 
+  it("does not hold a lane for a parent far below the loaded window", () => {
+    // The parent is loaded, but 300 rows down: drawing a line to it would reserve a
+    // column for the whole window, which is what made busy walks 80 columns wide.
+    const filler = Array.from({ length: 300 }, (_value, index) =>
+      commit(`m${index}`, index === 0 ? [] : [`m${index - 1}`]),
+    );
+    const layout = layoutGitGraph([commit("tip", ["far"]), ...filler, commit("far", [])]);
+    const tipRow = layout.rows[0];
+
+    expect(tipRow?.parentLanes).toEqual([]);
+    expect(tipRow?.continuesBelow).toBe(true);
+  });
+
+  it("holds a lane for a parent a few rows below", () => {
+    const filler = Array.from({ length: 50 }, (_value, index) =>
+      commit(`m${index}`, index === 0 ? [] : [`m${index - 1}`]),
+    );
+    const layout = layoutGitGraph([commit("tip", ["near"]), ...filler, commit("near", [])]);
+    const tipRow = layout.rows[0];
+
+    expect(tipRow?.parentLanes).toHaveLength(1);
+    expect(tipRow?.continuesBelow).toBe(false);
+  });
+
   it("does not flag a real root as continuing below", () => {
     const layout = layoutGitGraph([commit("a", ["b"]), commit("b", [])]);
 

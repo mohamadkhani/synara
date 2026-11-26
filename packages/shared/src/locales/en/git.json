@@ -473,5 +473,5 @@
   "historyWorktreeArchived": "Archived",
   "historyWorktreeShowArchived": "Show archived and unused worktrees ({{value0}})",
   "historyWorktreeHideArchived": "Hide archived and unused worktrees",
-  "historyGraphContinuesBelow": "This branch continues in a page that is not loaded yet; load more to follow it."
+  "historyGraphContinuesBelow": "This branch continues further down; its line is not drawn in this view."
 }

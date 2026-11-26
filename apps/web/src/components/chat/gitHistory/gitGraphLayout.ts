@@ -114,6 +114,14 @@ export interface GitGraphLayout {
 
 /** Palette size the renderer draws from; the layout only hands out indices. */
 const LANE_COLOR_COUNT = 10;
+/**
+ * How many rows below a commit its parent may sit before the layout stops holding a lane
+ * for it. A date-ordered walk over hundreds of branches puts a tip far above the ancestor
+ * it forks from, so holding every one of those lanes open produced graphs 80 columns wide
+ * whose merge edges swept the whole width. The connection is simply not drawn then; the
+ * branch ends with the same marked stub as a page boundary.
+ */
+const LANE_HOLD_LIMIT_ROWS = 200;
 
 /** Columns a lane array draws: the highest live lane plus one, or zero when empty. */
 function drawnColumnCount(lanes: ReadonlyArray<string | null>): number {
@@ -159,6 +167,7 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
   // hundreds of rows. This is what keeps a walk over hundreds of branch tips readable:
   // only connections inside the loaded window need a lane.
   const loaded = new Set(commits.map((commit) => commit.sha));
+  const positionBySha = new Map(commits.map((commit, position) => [commit.sha, position]));
   const lanes: Array<string | null> = [];
   // Colour of each lane slot, kept in step with `lanes` so a column that a later branch
   // reuses does not continue the previous occupant's colour.
@@ -207,7 +216,14 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
   let previousBottomColumns = new Set<number>();
   let laneCount = 0;
 
-  for (const commit of commits) {
+  /** True when a lane from `position` down to `parentSha` is worth drawing. */
+  const holdsParentLane = (parentSha: string, position: number): boolean => {
+    const parentPosition = positionBySha.get(parentSha);
+    if (parentPosition === undefined) return false;
+    return parentPosition - position <= LANE_HOLD_LIMIT_ROWS;
+  };
+
+  for (const [position, commit] of commits.entries()) {
     let lane = lanes.indexOf(commit.sha);
     let continuesFromAbove = lane >= 0;
     if (lane < 0) {
@@ -240,15 +256,15 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
 
     const after = lanes;
     const firstParent = commit.parents[0] ?? null;
-    if (firstParent !== null && loaded.has(firstParent)) {
+    if (firstParent !== null && holdsParentLane(firstParent, position)) {
       after[lane] = firstParent;
     } else {
       releaseLane(lane);
     }
 
     const targetForParent = (parentSha: string): number | null => {
-      // A parent outside the loaded window gets no lane: see `loaded` above.
-      if (!loaded.has(parentSha)) return null;
+      // A parent outside the loaded window, or too far below it, gets no lane.
+      if (!holdsParentLane(parentSha, position)) return null;
       if (after[lane] === parentSha) return lane;
       const existing = after.indexOf(parentSha);
       if (existing >= 0) return existing;
@@ -279,7 +295,7 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
     // A root, or a parent the reader has not loaded, ends the lane at this row.
     const releasedLanes = after[lane] === null && before[lane] !== null ? [lane] : [];
 
-    const continuesBelow = firstParent !== null && !loaded.has(firstParent);
+    const continuesBelow = firstParent !== null && !holdsParentLane(firstParent, position);
     const topColumns = drawnColumnCount(before);
     const bottomColumns = drawnColumnCount(after);
     const bottomLaneColors = laneColors.slice(0, after.length);
