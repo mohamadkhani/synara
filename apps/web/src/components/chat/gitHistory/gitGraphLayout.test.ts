@@ -132,6 +132,44 @@ describe("layoutGitGraph", () => {
   });
 });
 
+describe("lane colours", () => {
+  it("keeps a lane's colour while it stays open", () => {
+    const layout = layoutGitGraph([commit("a", ["b"]), commit("b", ["c"]), commit("c")]);
+
+    const colours = layout.rows.map((row) => row.topLaneColors[0]);
+    expect(colours[0]).toBe(colours[1]);
+    expect(colours[1]).toBe(colours[2]);
+  });
+
+  it("gives a reused column a fresh colour instead of continuing the old line", () => {
+    // `a` opens lane 0 and `b` ends it. `c` then takes the freed column: the two
+    // branches share a column but must not look like one broken line.
+    const layout = layoutGitGraph([commit("a", ["b"]), commit("b", []), commit("c", [])]);
+    const colourOf = (sha: string) => {
+      const row = layout.rows.find((entry) => entry.sha === sha);
+      return row?.topLaneColors[row.lane] ?? null;
+    };
+
+    expect(layout.rows[0]?.lane).toBe(0);
+    expect(layout.rows[2]?.lane).toBe(0);
+    expect(colourOf("a")).not.toBeNull();
+    expect(colourOf("c")).not.toBeNull();
+    expect(colourOf("a")).not.toBe(colourOf("c"));
+  });
+
+  it("keeps concurrent lanes on different colours", () => {
+    const layout = layoutGitGraph([
+      commit("m", ["a", "b", "c"]),
+      commit("a", []),
+      commit("b", []),
+      commit("c", []),
+    ]);
+    const firstRowColours = layout.rows[0]?.bottomLaneColors.filter((color) => color !== null);
+
+    expect(new Set(firstRowColours).size).toBe(firstRowColours?.length);
+  });
+});
+
 describe("row column count", () => {
   it("keeps every lane in one column instead of redrawing live lanes mid-history", () => {
     // Ten branches open, then eight end. The survivors keep their own columns, so no

@@ -23,6 +23,8 @@ import {
  * surfaces. Defined in the `@theme` block of index.css: the generic chart tokens
  * there are grayscale and made the graph vanish on the dark background.
  */
+const GIT_GRAPH_LANE_COLOR_COUNT = 10;
+
 const GIT_GRAPH_LANE_COLORS = [
   "var(--color-git-lane-1)",
   "var(--color-git-lane-2)",
@@ -36,8 +38,11 @@ const GIT_GRAPH_LANE_COLORS = [
   "var(--color-git-lane-10)",
 ] as const;
 
-function gitGraphLaneColor(lane: number): string {
-  return GIT_GRAPH_LANE_COLORS[lane % GIT_GRAPH_LANE_COLORS.length]!;
+function gitGraphLaneColor(colorIndex: number): string {
+  return GIT_GRAPH_LANE_COLORS[
+    ((colorIndex % GIT_GRAPH_LANE_COLOR_COUNT) + GIT_GRAPH_LANE_COLOR_COUNT) %
+      GIT_GRAPH_LANE_COLOR_COUNT
+  ]!;
 }
 
 function laneCenter(lane: number, laneWidth: number): number {
@@ -134,7 +139,16 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   const commitColumn = laneOutside ? gutter.lanes - 1 : row.lane;
   const commitX = laneCenter(commitColumn, laneWidth);
   const laneFits = (lane: number) => lane < gutter.lanes;
-  const color = gitGraphLaneColor(row.lane);
+  /**
+   * Colour of a lane as the layout recorded it: a lane keeps its colour while it is open,
+   * and a column a later branch reuses gets a fresh one, so two branches in one column
+   * never read as a single broken line.
+   */
+  const colorOf = (lane: number, edge: "top" | "bottom" = "top") => {
+    const colors = edge === "bottom" ? row.bottomLaneColors : row.topLaneColors;
+    return gitGraphLaneColor(colors[lane] ?? lane);
+  };
+  const color = colorOf(row.lane);
   const isCheckedOut = commit.refs.some((ref) => ref.kind === "head");
 
   return (
@@ -174,7 +188,7 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
           <path
             key={`through-${lane}`}
             d={`M ${laneCenter(lane, laneWidth)} 0 L ${laneCenter(lane, laneWidth)} ${height}`}
-            stroke={gitGraphLaneColor(lane)}
+            stroke={colorOf(lane)}
             strokeWidth={2}
             fill="none"
           />
@@ -183,7 +197,7 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
           <path
             key={`incoming-${lane}`}
             d={buildCurve(lane, commitColumn, 0, mid, laneWidth)}
-            stroke={gitGraphLaneColor(lane)}
+            stroke={colorOf(lane)}
             strokeWidth={2}
             fill="none"
           />
@@ -192,9 +206,9 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
           <path
             key={`parent-${lane}`}
             d={buildCurve(commitColumn, lane, mid, height, laneWidth)}
-            // The edge into a merged branch carries that branch's lane color, so a
-            // merge does not paint the incoming side with the target branch's hue.
-            stroke={gitGraphLaneColor(lane)}
+            // The edge into a merged branch carries that branch's color, so a merge does
+            // not paint the incoming side with the target branch's hue.
+            stroke={colorOf(lane, "bottom")}
             strokeWidth={2}
             fill="none"
           />
@@ -203,7 +217,7 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
           <path
             key={`released-${lane}`}
             d={`M ${commitX} ${mid} L ${commitX} ${height}`}
-            stroke={gitGraphLaneColor(lane)}
+            stroke={colorOf(lane)}
             strokeWidth={2}
             fill="none"
             // A lane that stops only because its parent sits in a page the reader has
