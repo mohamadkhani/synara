@@ -27,6 +27,7 @@ import {
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { basenameOfPath } from "~/file-icons";
 import { serverWorktreesQueryOptions } from "~/lib/serverReactQuery";
+import { useContainerSize } from "~/hooks/useContainerSize";
 import { useStore } from "~/store";
 import { createWorktreePathOwnershipSelector } from "~/storeSelectors";
 import { readNativeApi } from "~/nativeApi";
@@ -58,7 +59,7 @@ import {
   GitHistoryToolbar,
   type GitWorktreeOption,
 } from "./GitHistoryToolbar";
-import { GIT_GRAPH_ROW_HEIGHT, layoutGitGraph } from "./gitGraphLayout";
+import { GIT_GRAPH_ROW_HEIGHT, layoutGitGraph, resolveGitGraphLaneCap } from "./gitGraphLayout";
 
 /** A branch name, or one of the two reserved toolbar filter values. */
 type BranchFilterValue = string;
@@ -84,6 +85,7 @@ export function GitHistoryPanel(props: {
   const { t } = useTranslation();
   const { settings } = useAppSettings();
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null);
   const [branchFilter, setBranchFilter] = useState<BranchFilterValue>(ALL_BRANCHES_VALUE);
   const [search, setSearch] = useState("");
   const [selection, setSelection] = useState<GitHistorySelection | null>(null);
@@ -91,6 +93,9 @@ export function GitHistoryPanel(props: {
   // thread's active worktree until the reader picks another one.
   const [viewCwd, setViewCwd] = useState<string | null>(props.activeCwd);
   const [showAllWorktrees, setShowAllWorktrees] = useState(false);
+  // Remote branches stay in the graph by default; turning them off keeps the walk to
+  // local refs so a repository with hundreds of agent branches stays readable.
+  const [showRemoteBranches, setShowRemoteBranches] = useState(true);
   const worktreeOwnership = useStore(useMemo(() => createWorktreePathOwnershipSelector(), []));
   // Focus mode: the selected commit's details take the pane, and the list returns
   // when the reader collapses them again.
@@ -198,13 +203,19 @@ export function GitHistoryPanel(props: {
     [branchesQuery.data],
   );
   const remoteBranches = useMemo(
-    () => (branchesQuery.data?.branches ?? []).filter((branch) => branch.isRemote === true),
-    [branchesQuery.data],
+    () =>
+      showRemoteBranches
+        ? (branchesQuery.data?.branches ?? []).filter((branch) => branch.isRemote === true)
+        : [],
+    [branchesQuery.data, showRemoteBranches],
   );
   const currentBranch = useMemo(
     () => branchesQuery.data?.branches.find((branch) => branch.current)?.name ?? null,
     [branchesQuery.data],
   );
+  // A single configured remote lets the ref chips drop the `origin/` prefix; with
+  // several remotes the prefix is what tells the chips apart.
+  const remoteNames = useMemo(() => branchesQuery.data?.remoteNames ?? [], [branchesQuery.data]);
 
   const worktreeEntries = useMemo(() => {
     const branchByPath = new Map<string, string>();
@@ -260,7 +271,11 @@ export function GitHistoryPanel(props: {
         : branchFilter;
 
   const historyQuery = useInfiniteQuery(
-    gitCommitHistoryQueryOptions({ cwd: viewCwd, ref: historyRef }),
+    gitCommitHistoryQueryOptions({
+      cwd: viewCwd,
+      ref: historyRef,
+      includeRemoteBranches: showRemoteBranches,
+    }),
   );
 
   // A branch can disappear while it is the active filter (deleted here or by an
@@ -318,6 +333,12 @@ export function GitHistoryPanel(props: {
     () => layoutGitGraph(commits.map((commit) => ({ sha: commit.sha, parents: commit.parents }))),
     [commits],
   );
+  // The gutter width follows the pane, so widening the sidebar reveals more lanes and a
+  // narrow pane keeps the message readable. Past the cap the graph collapses to one rail
+  // rather than flattening deep lanes onto the last column.
+  const rootSize = useContainerSize(rootElement);
+  const laneCap = resolveGitGraphLaneCap(rootSize?.width ?? 0);
+  const graphCollapsed = layout.laneCount > laneCap;
 
   const normalizedSearch = deferredSearch.trim().toLowerCase();
   const isSearching = normalizedSearch.length > 0;
@@ -682,7 +703,7 @@ export function GitHistoryPanel(props: {
   const refreshing = historyQuery.isFetching && !historyQuery.isFetchingNextPage;
 
   return (
-    <div className={cn("flex min-h-0 min-w-0 flex-col", props.className)}>
+    <div ref={setRootElement} className={cn("flex min-h-0 min-w-0 flex-col", props.className)}>
       <GitHistoryToolbar
         worktrees={worktreeOptions}
         worktreePath={viewCwd ?? ""}
@@ -695,6 +716,8 @@ export function GitHistoryPanel(props: {
         hiddenWorktreeCount={hiddenWorktreeCount}
         branchFilter={branchFilter}
         branchFilterLabel={branchFilterLabel}
+        showRemoteBranches={showRemoteBranches}
+        onShowRemoteBranchesChange={setShowRemoteBranches}
         currentBranch={currentBranch}
         localBranches={localBranches}
         remoteBranches={remoteBranches}
@@ -713,6 +736,12 @@ export function GitHistoryPanel(props: {
             ? historyQuery.error.message
             : t("git:historyLoadFailed")}
         </Alert>
+      ) : null}
+
+      {graphCollapsed ? (
+        <p className="shrink-0 px-1.5 pb-1 text-ui-xs text-muted-foreground">
+          {t("git:historyGraphSimplified", { value0: layout.laneCount })}
+        </p>
       ) : null}
 
       <div
@@ -759,6 +788,7 @@ export function GitHistoryPanel(props: {
                     <GitStashRow
                       stash={entry.stash}
                       laneCount={layout.laneCount}
+                      laneCap={laneCap}
                       selected={selectedStash === entry.stash.sha}
                       onSelect={(stash) => selectEntry({ kind: "stash", sha: stash.sha })}
                       onContextMenu={(event) => void showStashContextMenu(entry.stash, event)}
@@ -769,6 +799,8 @@ export function GitHistoryPanel(props: {
                       isSearching,
                       row: rowBySha.get(entry.commit.sha),
                       laneCount: layout.laneCount,
+                      laneCap,
+                      remoteNames,
                       selection,
                       onSelect: selectEntry,
                       timestampFormat: settings.timestampFormat,
@@ -780,6 +812,7 @@ export function GitHistoryPanel(props: {
                       scope: entry.scope,
                       stats: entry.scope === "staged" ? stagedStats : unstagedStats,
                       laneCount: layout.laneCount,
+                      laneCap,
                       selection,
                       onSelect: selectEntry,
                       onContextMenu: showWorkingTreeContextMenu,
@@ -816,6 +849,7 @@ export function GitHistoryPanel(props: {
           key={selection.sha}
           cwd={viewCwd}
           sha={selection.sha}
+          remoteNames={remoteNames}
           theme={props.theme}
           listCommit={selectedCommit ?? undefined}
           commitActions={commitActions}
@@ -902,6 +936,7 @@ function renderWorkingTreeRow(input: {
   scope: "staged" | "unstaged";
   stats: { additions: number; deletions: number; fileCount: number } | null;
   laneCount: number;
+  laneCap: number;
   selection: GitHistorySelection | null;
   onSelect: (next: GitHistorySelection) => void;
   onContextMenu: (scope: GitStashScope, event: ReactMouseEvent) => void;
@@ -915,6 +950,7 @@ function renderWorkingTreeRow(input: {
       additions={input.stats?.additions ?? 0}
       deletions={input.stats?.deletions ?? 0}
       laneCount={input.laneCount}
+      laneCap={input.laneCap}
       selected={input.selection?.kind === "workingTree" && input.selection.scope === input.scope}
       onSelect={() => input.onSelect({ kind: "workingTree", scope: input.scope })}
       onContextMenu={(event) => input.onContextMenu(input.scope, event)}
@@ -927,6 +963,8 @@ function renderCommitRow(input: {
   isSearching: boolean;
   row: ReturnType<typeof layoutGitGraph>["rows"][number] | undefined;
   laneCount: number;
+  laneCap: number;
+  remoteNames: readonly string[];
   selection: GitHistorySelection | null;
   onSelect: (next: GitHistorySelection) => void;
   timestampFormat: Parameters<typeof formatShortTimestamp>[1];
@@ -945,6 +983,7 @@ function renderCommitRow(input: {
         authorLabel={input.commit.authorName}
         timeLabel={timeLabel}
         dateTimeLabel={dateTimeLabel}
+        remoteNames={input.remoteNames}
         onRefContextMenu={input.onRefContextMenu}
         onContextMenu={input.onCommitContextMenu}
       />
@@ -955,11 +994,13 @@ function renderCommitRow(input: {
       commit={input.commit}
       row={input.row}
       laneCount={input.laneCount}
+      laneCap={input.laneCap}
       selected={input.selection?.kind === "commit" && input.selection.sha === input.commit.sha}
       onSelect={(sha) => input.onSelect({ kind: "commit", sha })}
       authorLabel={input.commit.authorName}
       timeLabel={timeLabel}
       dateTimeLabel={dateTimeLabel}
+      remoteNames={input.remoteNames}
       onRefContextMenu={input.onRefContextMenu}
       onContextMenu={input.onCommitContextMenu}
     />

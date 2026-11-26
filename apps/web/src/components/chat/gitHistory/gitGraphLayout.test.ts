@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  GIT_GRAPH_MAX_VISIBLE_LANES,
-  clampGitGraphLane,
+  GIT_GRAPH_LANE_WIDTH,
+  GIT_GRAPH_MAX_LANE_CAP,
+  GIT_GRAPH_MIN_LANE_CAP,
   layoutGitGraph,
-  visibleGitGraphLaneCount,
+  resolveGitGraphGutter,
+  resolveGitGraphLaneCap,
 } from "./gitGraphLayout";
 
 const commit = (sha: string, parents: string[] = []) => ({ sha, parents });
@@ -118,23 +120,33 @@ describe("layoutGitGraph", () => {
   });
 });
 
-describe("lane gutter clamping", () => {
-  it("keeps lanes inside the drawn columns", () => {
-    expect(clampGitGraphLane(0)).toBe(0);
-    expect(clampGitGraphLane(GIT_GRAPH_MAX_VISIBLE_LANES - 1)).toBe(
-      GIT_GRAPH_MAX_VISIBLE_LANES - 1,
-    );
-    expect(clampGitGraphLane(GIT_GRAPH_MAX_VISIBLE_LANES + 5)).toBe(
-      GIT_GRAPH_MAX_VISIBLE_LANES - 1,
-    );
-    expect(clampGitGraphLane(-3)).toBe(0);
+describe("lane gutter sizing", () => {
+  it("grows the lane cap with the pane width, within bounds", () => {
+    expect(resolveGitGraphLaneCap(0)).toBe(GIT_GRAPH_MIN_LANE_CAP);
+    expect(resolveGitGraphLaneCap(Number.NaN)).toBe(GIT_GRAPH_MIN_LANE_CAP);
+    // A narrow pane keeps the small cap so the message column survives.
+    expect(resolveGitGraphLaneCap(120)).toBe(GIT_GRAPH_MIN_LANE_CAP);
+    // 600px * 0.35 / 12px = 17 columns.
+    expect(resolveGitGraphLaneCap(600)).toBe(17);
+    // A very wide pane stops at the ceiling.
+    expect(resolveGitGraphLaneCap(4000)).toBe(GIT_GRAPH_MAX_LANE_CAP);
   });
 
-  it("reserves at least one column and caps the gutter", () => {
-    expect(visibleGitGraphLaneCount(0)).toBe(1);
-    expect(visibleGitGraphLaneCount(3)).toBe(3);
-    expect(visibleGitGraphLaneCount(GIT_GRAPH_MAX_VISIBLE_LANES + 40)).toBe(
-      GIT_GRAPH_MAX_VISIBLE_LANES,
-    );
+  it("draws every lane when the history fits the cap", () => {
+    expect(resolveGitGraphGutter(0, 10)).toEqual({ lanes: 1, collapsed: false });
+    expect(resolveGitGraphGutter(3, 10)).toEqual({ lanes: 3, collapsed: false });
+    expect(resolveGitGraphGutter(10, 10)).toEqual({ lanes: 10, collapsed: false });
+  });
+
+  it("collapses to one rail instead of flattening deeper lanes", () => {
+    // Flattening 400 lanes onto the last column would draw merges that do not exist.
+    expect(resolveGitGraphGutter(11, 10)).toEqual({ lanes: 1, collapsed: true });
+    expect(resolveGitGraphGutter(400, 10)).toEqual({ lanes: 1, collapsed: true });
+    // A degenerate cap still renders one rail rather than zero columns.
+    expect(resolveGitGraphGutter(4, 0)).toEqual({ lanes: 1, collapsed: true });
+  });
+
+  it("keeps the gutter proportional to the drawn columns", () => {
+    expect(GIT_GRAPH_LANE_WIDTH).toBeGreaterThan(0);
   });
 });

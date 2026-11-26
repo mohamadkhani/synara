@@ -53,8 +53,8 @@ export const gitQueryKeys = {
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
   recentCommits: (cwd: string | null, limit: number) =>
     ["git", "recent-commits", cwd, limit] as const,
-  commitHistory: (cwd: string | null, ref: string | null, limit: number) =>
-    ["git", "commit-history", cwd, ref, limit] as const,
+  commitHistory: (cwd: string | null, ref: string | null, limit: number, includeRemote = true) =>
+    ["git", "commit-history", cwd, ref, limit, includeRemote] as const,
   commitDiff: (cwd: string | null, sha: string | null) => ["git", "commit-diff", cwd, sha] as const,
   pullRequest: (cwd: string | null) => ["git", "pull-request", cwd] as const,
   workingTreeDiffs: (cwd: string | null) => ["git", "working-tree-diff", cwd] as const,
@@ -660,11 +660,14 @@ export function gitCommitHistoryQueryOptions(input: {
   cwd: string | null;
   ref: string | null;
   limit?: number;
+  /** False drops `refs/remotes/*` from the all-refs walk (the toolbar switch). */
+  includeRemoteBranches?: boolean;
   enabled?: boolean;
 }) {
   const limit = input.limit ?? DEFAULT_GIT_COMMIT_HISTORY_LIMIT;
+  const includeRemoteBranches = input.includeRemoteBranches ?? true;
   return infiniteQueryOptions({
-    queryKey: gitQueryKeys.commitHistory(input.cwd, input.ref, limit),
+    queryKey: gitQueryKeys.commitHistory(input.cwd, input.ref, limit, includeRemoteBranches),
     queryFn: async ({ pageParam }) => {
       const api = ensureNativeApi();
       if (!input.cwd) throw new Error("Commit history is unavailable.");
@@ -672,6 +675,7 @@ export function gitCommitHistoryQueryOptions(input: {
         cwd: input.cwd,
         limit,
         skip: pageParam,
+        includeRemoteBranches,
         ...(input.ref ? { ref: input.ref } : {}),
       });
     },

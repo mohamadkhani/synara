@@ -44,6 +44,8 @@ export function GitCommitDetail(props: {
   theme: "light" | "dark";
   /** Already-loaded list row, so the header can render before the diff arrives. */
   listCommit?: GitHistoryCommit | undefined;
+  /** Configured remotes; a single remote lets its ref chips drop the `origin/` prefix. */
+  remoteNames?: readonly string[];
   /** Shared with the history list so pending state and dialogs are not duplicated. */
   commitActions: GitCommitActions;
   /** True while the details take the whole pane instead of sharing it with the list. */
@@ -117,7 +119,7 @@ export function GitCommitDetail(props: {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex min-w-0 items-start gap-2 border-b border-border/70 px-2 py-2">
+      <div className="@container flex min-w-0 items-start gap-2 border-b border-border/70 px-2 py-2">
         <div className="min-w-0 flex-1">
           {commit ? (
             <p className="min-w-0 truncate text-ui-lg font-medium text-foreground">
@@ -130,6 +132,7 @@ export function GitCommitDetail(props: {
             {commit ? (
               <GitCommitRefBadges
                 commit={commit}
+                {...(props.remoteNames ? { remoteNames: props.remoteNames } : {})}
                 {...(props.onRefContextMenu ? { onRefContextMenu: props.onRefContextMenu } : {})}
               />
             ) : null}

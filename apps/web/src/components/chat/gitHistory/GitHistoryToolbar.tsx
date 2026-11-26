@@ -3,6 +3,7 @@
 // Layer: Git history UI
 
 import type { GitBranch } from "@synara/contracts";
+import { useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { DownloadIcon, GitBranchIcon, RefreshCwIcon, WorktreeIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -15,13 +16,20 @@ import {
   MenuCheckboxItem,
   MenuGroup,
   MenuGroupLabel,
+  MenuItem,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator,
+  MenuSub,
+  MenuSubTrigger,
   MenuTrigger,
 } from "../../ui/menu";
 import { SearchInput } from "../../ui/search-input";
-import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
+import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "../ComposerPickerMenuPopup";
+import {
+  BRANCH_FILTER_RESULT_LIMIT,
+  groupRemoteBranchesByNamespace,
+} from "./gitBranchFilterGroups";
 
 export const ALL_BRANCHES_VALUE = "__all__";
 export const CURRENT_BRANCH_VALUE = "__current__";
@@ -52,7 +60,10 @@ export function GitHistoryToolbar(props: {
   currentBranch: string | null;
   localBranches: ReadonlyArray<GitBranch>;
   remoteBranches: ReadonlyArray<GitBranch>;
+  /** The "Show remote branches" switch: remote refs leave the graph when off. */
+  showRemoteBranches: boolean;
   onBranchFilterChange: (value: string) => void;
+  onShowRemoteBranchesChange: (value: boolean) => void;
   search: string;
   onSearchChange: (value: string) => void;
   refreshing: boolean;
@@ -61,12 +72,34 @@ export function GitHistoryToolbar(props: {
   onFetch: () => void;
 }) {
   const { t } = useTranslation();
+  const [branchQuery, setBranchQuery] = useState("");
   const selectBranch = (value: string) => props.onBranchFilterChange(value);
   // The current branch is already offered as "checked out"; repeating it by name in
   // the branch list made two entries with the same label behave differently.
   const otherLocalBranches = props.localBranches.filter(
     (branch) => branch.name !== props.currentBranch,
   );
+  // Hundreds of remote branches cannot live on one menu level: group them by the
+  // namespace after the remote (`origin/synara/x` -> `synara`) and filter by name.
+  const remoteGroups = useMemo(
+    () => groupRemoteBranchesByNamespace(props.remoteBranches),
+    [props.remoteBranches],
+  );
+  const branchQueryNormalized = branchQuery.trim().toLowerCase();
+  const matchingBranches = useMemo(() => {
+    if (branchQueryNormalized.length === 0) return [];
+    const matches: GitBranch[] = [];
+    for (const branch of [...props.localBranches, ...props.remoteBranches]) {
+      if (branch.name.toLowerCase().includes(branchQueryNormalized)) matches.push(branch);
+      if (matches.length >= BRANCH_FILTER_RESULT_LIMIT) break;
+    }
+    return matches;
+  }, [branchQueryNormalized, props.localBranches, props.remoteBranches]);
+  // A search field inside a menu must not leak keystrokes into the menu's typeahead,
+  // or typing would move the highlight instead of filtering.
+  const stopMenuKeyHandling = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    event.stopPropagation();
+  };
 
   const selectedWorktree = props.worktrees.find((entry) => entry.path === props.worktreePath);
   const viewingOtherWorktree = selectedWorktree !== undefined && !selectedWorktree.active;
@@ -161,35 +194,86 @@ export function GitHistoryToolbar(props: {
             </Button>
           }
         />
-        <ComposerPickerMenuPopup align="start" side="bottom" className="w-64 min-w-64">
-          <MenuGroup>
-            <MenuGroupLabel>{t("git:historyBranchFilter")}</MenuGroupLabel>
-            <MenuRadioGroup value={props.branchFilter} onValueChange={selectBranch}>
-              <MenuRadioItem value={ALL_BRANCHES_VALUE}>
-                {t("git:historyAllBranches")}
-              </MenuRadioItem>
-              {props.currentBranch ? (
-                <MenuRadioItem value={CURRENT_BRANCH_VALUE}>{props.currentBranch}</MenuRadioItem>
-              ) : null}
-              {otherLocalBranches.map((branch) => (
-                <MenuRadioItem key={branch.name} value={branch.name}>
-                  {branch.name}
-                </MenuRadioItem>
-              ))}
-            </MenuRadioGroup>
-          </MenuGroup>
-          {props.remoteBranches.length > 0 ? (
+        <ComposerPickerMenuPopup align="start" side="bottom" className="w-72 min-w-72">
+          <div className="p-1.5">
+            <SearchInput
+              value={branchQuery}
+              onChange={(event) => setBranchQuery(event.target.value)}
+              onKeyDown={stopMenuKeyHandling}
+              placeholder={t("git:historyFilterBranches")}
+              aria-label={t("git:historyFilterBranches")}
+            />
+          </div>
+          {branchQueryNormalized.length > 0 ? (
             <MenuGroup>
-              <MenuGroupLabel>{t("git:historyRemoteBranches")}</MenuGroupLabel>
-              <MenuRadioGroup value={props.branchFilter} onValueChange={selectBranch}>
-                {props.remoteBranches.map((branch) => (
-                  <MenuRadioItem key={branch.name} value={branch.name}>
-                    {branch.name}
-                  </MenuRadioItem>
-                ))}
-              </MenuRadioGroup>
+              <MenuGroupLabel>{t("git:historyBranchFilter")}</MenuGroupLabel>
+              {matchingBranches.length === 0 ? (
+                <MenuItem disabled>{t("git:historyNoMatchingBranches")}</MenuItem>
+              ) : (
+                <MenuRadioGroup value={props.branchFilter} onValueChange={selectBranch}>
+                  {matchingBranches.map((branch) => (
+                    <MenuRadioItem
+                      key={`${branch.isRemote === true ? "r" : "l"}:${branch.name}`}
+                      value={branch.name}
+                    >
+                      <span className="min-w-0 truncate">{branch.name}</span>
+                    </MenuRadioItem>
+                  ))}
+                </MenuRadioGroup>
+              )}
             </MenuGroup>
-          ) : null}
+          ) : (
+            <>
+              <MenuGroup>
+                <MenuGroupLabel>{t("git:historyBranchFilter")}</MenuGroupLabel>
+                <MenuRadioGroup value={props.branchFilter} onValueChange={selectBranch}>
+                  <MenuRadioItem value={ALL_BRANCHES_VALUE}>
+                    {t("git:historyAllBranches")}
+                  </MenuRadioItem>
+                  {props.currentBranch ? (
+                    <MenuRadioItem value={CURRENT_BRANCH_VALUE}>
+                      {props.currentBranch}
+                    </MenuRadioItem>
+                  ) : null}
+                  {otherLocalBranches.map((branch) => (
+                    <MenuRadioItem key={branch.name} value={branch.name}>
+                      {branch.name}
+                    </MenuRadioItem>
+                  ))}
+                </MenuRadioGroup>
+              </MenuGroup>
+              {props.showRemoteBranches
+                ? remoteGroups.map((group) => (
+                    <MenuSub key={group.namespace}>
+                      <MenuSubTrigger>
+                        <span className="min-w-0 flex-1 truncate">{group.namespace}</span>
+                        <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
+                          {group.branches.length}
+                        </span>
+                      </MenuSubTrigger>
+                      <ComposerPickerMenuSubPopup className="max-h-80 min-w-56 overflow-y-auto">
+                        <MenuRadioGroup value={props.branchFilter} onValueChange={selectBranch}>
+                          {group.branches.map((branch) => (
+                            <MenuRadioItem key={branch.name} value={branch.name}>
+                              <span className="min-w-0 truncate">
+                                {branch.name.slice(branch.name.indexOf("/") + 1)}
+                              </span>
+                            </MenuRadioItem>
+                          ))}
+                        </MenuRadioGroup>
+                      </ComposerPickerMenuSubPopup>
+                    </MenuSub>
+                  ))
+                : null}
+            </>
+          )}
+          <MenuSeparator />
+          <MenuCheckboxItem
+            checked={props.showRemoteBranches}
+            onCheckedChange={(checked) => props.onShowRemoteBranchesChange(checked === true)}
+          >
+            {t("git:historyShowRemoteBranches")}
+          </MenuCheckboxItem>
         </ComposerPickerMenuPopup>
       </Menu>
       <div className="min-w-0 flex-1">

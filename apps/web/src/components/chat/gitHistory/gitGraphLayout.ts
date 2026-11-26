@@ -9,20 +9,41 @@
 export const GIT_GRAPH_ROW_HEIGHT = 32;
 export const GIT_GRAPH_LANE_WIDTH = 12;
 /**
- * Past this many parallel branches the gutter stops growing: deeper lanes are
- * drawn in the last column. A history-wide lane count can otherwise reserve
- * hundreds of pixels for rows that only use one lane, squeezing the message.
+ * Bounds for how many lanes the gutter may draw. The cap follows the pane width, so
+ * widening the sidebar reveals more of the graph, and a narrow pane keeps the commit
+ * message readable.
  */
-export const GIT_GRAPH_MAX_VISIBLE_LANES = 10;
+export const GIT_GRAPH_MIN_LANE_CAP = 6;
+export const GIT_GRAPH_MAX_LANE_CAP = 18;
+/** Share of the pane the gutter may take before the message column starves. */
+const GIT_GRAPH_GUTTER_WIDTH_RATIO = 0.35;
 
-/** Lane index clamped to the drawn columns, so the graph and its gutter agree. */
-export function clampGitGraphLane(lane: number): number {
-  return Math.min(Math.max(lane, 0), GIT_GRAPH_MAX_VISIBLE_LANES - 1);
+/**
+ * Lanes a pane `availableWidth` pixels wide may draw. Floored to whole columns and
+ * bounded so a very narrow pane still shows a few lanes and a wide one stays readable.
+ */
+export function resolveGitGraphLaneCap(availableWidth: number): number {
+  if (!Number.isFinite(availableWidth) || availableWidth <= 0) return GIT_GRAPH_MIN_LANE_CAP;
+  const cap = Math.floor((availableWidth * GIT_GRAPH_GUTTER_WIDTH_RATIO) / GIT_GRAPH_LANE_WIDTH);
+  return Math.min(GIT_GRAPH_MAX_LANE_CAP, Math.max(GIT_GRAPH_MIN_LANE_CAP, cap));
 }
 
-/** Columns the gutter reserves for a layout with `laneCount` lanes. */
-export function visibleGitGraphLaneCount(laneCount: number): number {
-  return Math.max(1, Math.min(laneCount, GIT_GRAPH_MAX_VISIBLE_LANES));
+export interface GitGraphGutter {
+  /** Columns the gutter draws. */
+  readonly lanes: number;
+  /**
+   * True when the history has more lanes than the gutter can draw. The renderer then
+   * draws a single rail instead of flattening deep lanes onto the last column, which
+   * would draw merges that do not exist.
+   */
+  readonly collapsed: boolean;
+}
+
+/** Columns the gutter draws for a layout, and whether that required collapsing. */
+export function resolveGitGraphGutter(laneCount: number, laneCap: number): GitGraphGutter {
+  const cap = Math.max(1, Math.floor(laneCap));
+  if (laneCount > cap) return { lanes: 1, collapsed: true };
+  return { lanes: Math.max(1, laneCount), collapsed: false };
 }
 
 export interface GitGraphCommitInput {

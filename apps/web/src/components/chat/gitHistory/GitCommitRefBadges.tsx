@@ -1,6 +1,8 @@
 // FILE: GitCommitRefBadges.tsx
 // Purpose: The ref chips shown on a commit row and in the commit detail header:
 //          HEAD, checked-out branch, other local branches, remote branches, and tags.
+//          Remote chips drop the `origin/` prefix when the repository has one remote, and
+//          the chip widens with the pane so a branch name is not cut off in a wide dock.
 // Layer: Git history UI
 
 import type { GitHistoryCommit } from "@synara/contracts";
@@ -9,6 +11,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import { GitBranchIcon, GlobeIcon, TagIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useTranslation } from "~/i18n";
+import { resolveRefChipLabel } from "./gitRefChipLabel";
 
 const REF_KIND_PRIORITY: Record<GitHistoryCommit["refs"][number]["kind"], number> = {
   head: 0,
@@ -29,6 +32,8 @@ export function GitCommitRefBadges(props: {
   className?: string;
   /** Caps the row width: extra refs collapse into a "+N" chip. */
   maxVisible?: number;
+  /** Configured remotes; a single remote lets its chips drop the `origin/` prefix. */
+  remoteNames?: readonly string[];
   onRefContextMenu?: (
     commit: GitHistoryCommit,
     ref: GitHistoryCommit["refs"][number],
@@ -57,7 +62,9 @@ export function GitCommitRefBadges(props: {
         const isRemote = ref.kind === "remote";
         const Icon = isTag ? TagIcon : isRemote ? GlobeIcon : GitBranchIcon;
         const isCheckedOutBranch = ref.kind === "branch" && ref.checkedOut;
-        const label = isHead ? t("git:historyHeadBadge") : ref.name;
+        const label = isHead
+          ? t("git:historyHeadBadge")
+          : resolveRefChipLabel(ref, props.remoteNames ?? []);
         return (
           <span
             key={`${ref.kind}:${ref.name}`}
@@ -85,7 +92,9 @@ export function GitCommitRefBadges(props: {
                       : t("git:historyBranchBadgeTitle", { value0: ref.name })
             }
             className={cn(
-              "inline-flex max-w-[8rem] shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-ui-xs font-medium",
+              // Grows with the pane so widening the dock reveals more of the name; the
+              // row is a container, so these steps follow its real width.
+              "inline-flex max-w-[8rem] shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-ui-xs font-medium @min-[26rem]:max-w-[13rem] @min-[34rem]:max-w-[20rem] @min-[46rem]:max-w-[28rem]",
               // The chip is a right-click target; without this the pointer stays the
               // text cursor over the label.
               onRefContextMenu ? "cursor-pointer" : undefined,

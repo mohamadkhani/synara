@@ -157,6 +157,7 @@ export function makeGitHistoryOps(deps: GitHistoryOpsDeps): {
       const limit = Math.min(Math.max(requestedLimit, 1), MAX_GIT_COMMIT_HISTORY_LIMIT);
       const skip = Math.max(input.skip ?? 0, 0);
       const ref = input.ref?.trim() ?? "";
+      const includeRemoteBranches = input.includeRemoteBranches !== false;
 
       // Resolve a caller-supplied revision first so an unknown ref reports a real
       // error instead of silently walking HEAD, and so option-like values never
@@ -195,6 +196,9 @@ export function makeGitHistoryOps(deps: GitHistoryOpsDeps): {
               "--exclude=refs/notes/*",
               "--exclude=refs/replace/*",
               "--exclude=refs/bisect/*",
+              // The toolbar's "Show remote branches" switch; remote-only commits drop
+              // out of the graph when it is off.
+              ...(includeRemoteBranches ? [] : ["--exclude=refs/remotes/*"]),
               "--all",
             ]
           : [resolvedRef]),

@@ -327,6 +327,9 @@ export const GitListCommitHistoryInput = Schema.Struct({
   // Restrict the walk to one revision (a branch, remote branch, tag, or commit).
   // Missing means every ref, matching how a commit graph is usually browsed.
   ref: Schema.optional(GitRevisionArgumentSchema),
+  // All-refs walks include `refs/remotes/*` unless this is false, which is the
+  // "Show remote branches" switch in the history toolbar.
+  includeRemoteBranches: Schema.optional(Schema.Boolean),
 });
 export type GitListCommitHistoryInput = typeof GitListCommitHistoryInput.Type;
 

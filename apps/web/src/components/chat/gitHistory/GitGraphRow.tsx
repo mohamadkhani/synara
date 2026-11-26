@@ -14,8 +14,7 @@ import { GitCommitRefBadges } from "./GitCommitRefBadges";
 import {
   GIT_GRAPH_LANE_WIDTH,
   GIT_GRAPH_ROW_HEIGHT,
-  clampGitGraphLane,
-  visibleGitGraphLaneCount,
+  resolveGitGraphGutter,
   type GitGraphRow,
 } from "./gitGraphLayout";
 
@@ -71,6 +70,7 @@ function CommitRowSummary(props: {
   timeLabel: string;
   /** Full date and time for the row's hover title. */
   dateTimeLabel: string;
+  remoteNames?: readonly string[];
   onRefContextMenu?: (
     commit: GitHistoryCommit,
     ref: GitHistoryCommit["refs"][number],
@@ -83,6 +83,7 @@ function CommitRowSummary(props: {
       <GitCommitRefBadges
         commit={commit}
         maxVisible={2}
+        {...(props.remoteNames ? { remoteNames: props.remoteNames } : {})}
         {...(onRefContextMenu ? { onRefContextMenu } : {})}
       />
       <span className="min-w-0 flex-1 truncate text-ui text-foreground">{commit.subject}</span>
@@ -103,11 +104,14 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   commit: GitHistoryCommit;
   row: GitGraphRow;
   laneCount: number;
+  /** Lanes this pane can draw; a deeper history collapses to one rail. */
+  laneCap: number;
   selected: boolean;
   onSelect: (sha: string) => void;
   authorLabel: string;
   timeLabel: string;
   dateTimeLabel: string;
+  remoteNames?: readonly string[];
   onRefContextMenu?: (
     commit: GitHistoryCommit,
     ref: GitHistoryCommit["refs"][number],
@@ -118,9 +122,10 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   const { commit, row } = props;
   const height = GIT_GRAPH_ROW_HEIGHT;
   const laneWidth = GIT_GRAPH_LANE_WIDTH;
-  const width = visibleGitGraphLaneCount(props.laneCount) * laneWidth;
+  const gutter = resolveGitGraphGutter(props.laneCount, props.laneCap);
+  const width = gutter.lanes * laneWidth;
   const mid = height / 2;
-  const commitX = laneCenter(clampGitGraphLane(row.lane), laneWidth);
+  const commitX = laneCenter(gutter.collapsed ? 0 : row.lane, laneWidth);
   const color = gitGraphLaneColor(row.lane);
   const isCheckedOut = commit.refs.some((ref) => ref.kind === "head");
 
@@ -146,7 +151,17 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
         className="shrink-0"
         aria-hidden="true"
       >
-        {row.continuesFromAbove ? (
+        {gutter.collapsed ? (
+          // Too many parallel branches to draw truthfully. A single muted rail keeps
+          // every commit anchored without inventing merges onto a flattened last lane.
+          <path
+            d={`M ${commitX} 0 L ${commitX} ${height}`}
+            stroke="var(--color-border)"
+            strokeWidth={1}
+            fill="none"
+          />
+        ) : null}
+        {!gutter.collapsed && row.continuesFromAbove ? (
           <path
             d={`M ${commitX} 0 L ${commitX} ${mid}`}
             stroke={color}
@@ -154,50 +169,52 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
             fill="none"
           />
         ) : null}
-        {row.throughLanes.map((lane) => (
-          <path
-            key={`through-${lane}`}
-            d={`M ${laneCenter(clampGitGraphLane(lane), laneWidth)} 0 L ${laneCenter(clampGitGraphLane(lane), laneWidth)} ${height}`}
-            stroke={gitGraphLaneColor(lane)}
-            strokeWidth={2}
-            fill="none"
-          />
-        ))}
-        {row.incomingLanes.map((lane) => (
-          <path
-            key={`incoming-${lane}`}
-            d={buildCurve(clampGitGraphLane(lane), clampGitGraphLane(row.lane), 0, mid, laneWidth)}
-            stroke={gitGraphLaneColor(lane)}
-            strokeWidth={2}
-            fill="none"
-          />
-        ))}
-        {row.parentLanes.map((lane) => (
-          <path
-            key={`parent-${lane}`}
-            d={buildCurve(
-              clampGitGraphLane(row.lane),
-              clampGitGraphLane(lane),
-              mid,
-              height,
-              laneWidth,
-            )}
-            // The edge into a merged branch carries that branch's lane color, so a
-            // merge does not paint the incoming side with the target branch's hue.
-            stroke={gitGraphLaneColor(lane)}
-            strokeWidth={2}
-            fill="none"
-          />
-        ))}
-        {row.releasedLanes.map((lane) => (
-          <path
-            key={`released-${lane}`}
-            d={`M ${laneCenter(clampGitGraphLane(lane), laneWidth)} ${mid} L ${laneCenter(clampGitGraphLane(lane), laneWidth)} ${height}`}
-            stroke={gitGraphLaneColor(lane)}
-            strokeWidth={2}
-            fill="none"
-          />
-        ))}
+        {gutter.collapsed
+          ? null
+          : row.throughLanes.map((lane) => (
+              <path
+                key={`through-${lane}`}
+                d={`M ${laneCenter(lane, laneWidth)} 0 L ${laneCenter(lane, laneWidth)} ${height}`}
+                stroke={gitGraphLaneColor(lane)}
+                strokeWidth={2}
+                fill="none"
+              />
+            ))}
+        {gutter.collapsed
+          ? null
+          : row.incomingLanes.map((lane) => (
+              <path
+                key={`incoming-${lane}`}
+                d={buildCurve(lane, row.lane, 0, mid, laneWidth)}
+                stroke={gitGraphLaneColor(lane)}
+                strokeWidth={2}
+                fill="none"
+              />
+            ))}
+        {gutter.collapsed
+          ? null
+          : row.parentLanes.map((lane) => (
+              <path
+                key={`parent-${lane}`}
+                d={buildCurve(row.lane, lane, mid, height, laneWidth)}
+                // The edge into a merged branch carries that branch's lane color, so a
+                // merge does not paint the incoming side with the target branch's hue.
+                stroke={gitGraphLaneColor(lane)}
+                strokeWidth={2}
+                fill="none"
+              />
+            ))}
+        {gutter.collapsed
+          ? null
+          : row.releasedLanes.map((lane) => (
+              <path
+                key={`released-${lane}`}
+                d={`M ${laneCenter(lane, laneWidth)} ${mid} L ${laneCenter(lane, laneWidth)} ${height}`}
+                stroke={gitGraphLaneColor(lane)}
+                strokeWidth={2}
+                fill="none"
+              />
+            ))}
         <circle
           cx={commitX}
           cy={mid}
@@ -212,6 +229,7 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
         authorLabel={props.authorLabel}
         timeLabel={props.timeLabel}
         dateTimeLabel={props.dateTimeLabel}
+        {...(props.remoteNames ? { remoteNames: props.remoteNames } : {})}
         {...(props.onRefContextMenu ? { onRefContextMenu: props.onRefContextMenu } : {})}
       />
     </button>
@@ -227,6 +245,7 @@ export const GitCommitFlatRow = memo(function GitCommitFlatRow(props: {
   timeLabel: string;
   /** Full date and time for the row's hover title. */
   dateTimeLabel: string;
+  remoteNames?: readonly string[];
   onRefContextMenu?: (
     commit: GitHistoryCommit,
     ref: GitHistoryCommit["refs"][number],
@@ -255,6 +274,7 @@ export const GitCommitFlatRow = memo(function GitCommitFlatRow(props: {
         authorLabel={props.authorLabel}
         timeLabel={props.timeLabel}
         dateTimeLabel={props.dateTimeLabel}
+        {...(props.remoteNames ? { remoteNames: props.remoteNames } : {})}
         {...(props.onRefContextMenu ? { onRefContextMenu: props.onRefContextMenu } : {})}
       />
     </button>
@@ -269,11 +289,14 @@ export const GitCommitFlatRow = memo(function GitCommitFlatRow(props: {
 export const GitStashRow = memo(function GitStashRow(props: {
   stash: GitStashEntry;
   laneCount: number;
+  /** Lanes this pane can draw; deeper histories collapse to one rail. */
+  laneCap: number;
   selected?: boolean;
   onSelect?: (stash: GitStashEntry) => void;
   onContextMenu?: (event: ReactMouseEvent) => void;
 }) {
-  const gutterWidth = visibleGitGraphLaneCount(props.laneCount) * GIT_GRAPH_LANE_WIDTH;
+  const gutterWidth =
+    resolveGitGraphGutter(props.laneCount, props.laneCap).lanes * GIT_GRAPH_LANE_WIDTH;
   return (
     <button
       type="button"
@@ -315,9 +338,12 @@ export const GitWorkingTreeRow = memo(function GitWorkingTreeRow(props: {
   selected: boolean;
   onSelect: () => void;
   laneCount: number;
+  /** Lanes this pane can draw; deeper histories collapse to one rail. */
+  laneCap: number;
   onContextMenu?: (event: ReactMouseEvent) => void;
 }) {
-  const gutterWidth = visibleGitGraphLaneCount(props.laneCount) * GIT_GRAPH_LANE_WIDTH;
+  const gutterWidth =
+    resolveGitGraphGutter(props.laneCount, props.laneCap).lanes * GIT_GRAPH_LANE_WIDTH;
   return (
     <button
       type="button"

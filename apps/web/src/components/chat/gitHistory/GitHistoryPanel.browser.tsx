@@ -228,6 +228,98 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
+  it("collapses the graph to one rail when the history has more lanes than the pane", async () => {
+    // Nineteen commits whose parents never load keep nineteen lanes open at once, past
+    // the cap this pane can draw, so the graph must simplify instead of flattening.
+    harness.listCommitHistory.mockResolvedValue({
+      commits: Array.from({ length: 19 }, (_value, index) => ({
+        ...commit,
+        sha: `${index}`.padStart(40, "a"),
+        shortSha: `${index}`,
+        subject: `commit ${index}`,
+        parents: [`missing-${index}`.padEnd(40, "b")],
+        refs: [],
+      })),
+      hasMore: false,
+    });
+    const screen = await mount();
+
+    await expect.element(page.getByText(/Graph simplified/)).toBeVisible();
+    const row = page.getByTitle("commit 0");
+    await expect.element(row).toBeVisible();
+    // One rail: the gutter is a single lane wide instead of the clamped lanes.
+    expect(row.element().querySelector("svg")?.getAttribute("width")).toBe("12");
+    await screen.unmount();
+  });
+
+  it("groups remote branches by namespace and filters them by name", async () => {
+    harness.listBranches.mockResolvedValue({
+      branches: [
+        { name: "main", current: true, isDefault: true, worktreePath: null },
+        {
+          name: "origin/main",
+          isRemote: true,
+          remoteName: "origin",
+          current: false,
+          isDefault: false,
+          worktreePath: null,
+        },
+        {
+          name: "origin/synara/fix-one",
+          isRemote: true,
+          remoteName: "origin",
+          current: false,
+          isDefault: false,
+          worktreePath: null,
+        },
+        {
+          name: "origin/codex/thing",
+          isRemote: true,
+          remoteName: "origin",
+          current: false,
+          isDefault: false,
+          worktreePath: null,
+        },
+      ],
+      isRepo: true,
+      hasOriginRemote: true,
+      remoteNames: ["origin"],
+    });
+    const screen = await mount();
+
+    await page.getByRole("button", { name: "Branches" }).click();
+    await expect.element(page.getByRole("menuitem", { name: /synara/ })).toBeVisible();
+    await expect.element(page.getByRole("menuitem", { name: /codex/ })).toBeVisible();
+
+    await page.getByLabelText("Filter branches").fill("fix-one");
+    await expect
+      .element(page.getByRole("menuitemradio", { name: "origin/synara/fix-one" }))
+      .toBeVisible();
+    // The other namespaces drop out of the filtered list.
+    expect(page.getByRole("menuitemradio", { name: "origin/codex/thing" }).elements()).toHaveLength(
+      0,
+    );
+
+    await page.getByRole("menuitemcheckbox", { name: "Show remote branches" }).click();
+    await vi.waitFor(() =>
+      expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ includeRemoteBranches: false }),
+      ),
+    );
+    // Close the menu before unmounting so its portal is not torn down with the root.
+    await screen.unmount();
+  });
+
+  it("shows the short remote name on the chip and the full ref on hover", async () => {
+    const screen = await mount();
+
+    const chip = page.getByTitle("Remote branch origin/feature");
+    await expect.element(chip).toBeVisible();
+    await expect.element(chip).toHaveTextContent("feature");
+    expect(chip.element().textContent).not.toContain("origin/");
+    await screen.unmount();
+  });
+
   it("stashes the staged row with the title typed into its dialog", async () => {
     harness.workingTreeDiffStats.mockResolvedValue({ additions: 1, deletions: 0, fileCount: 1 });
     harness.contextMenuShow.mockResolvedValue("stash-changes");

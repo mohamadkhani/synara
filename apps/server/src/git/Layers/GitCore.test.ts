@@ -1253,7 +1253,10 @@ it.layer(TestLayer)("git integration", (it) => {
   // ── commit history ──
 
   describe("commit history", () => {
-    const readHistory = (cwd: string, input: { limit?: number; skip?: number; ref?: string }) =>
+    const readHistory = (
+      cwd: string,
+      input: { limit?: number; skip?: number; ref?: string; includeRemoteBranches?: boolean },
+    ) =>
       Effect.gen(function* () {
         return yield* (yield* GitCore).listCommitHistory({ cwd, ...input });
       });
@@ -1283,6 +1286,42 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(page.commits[0]?.refs.some((ref) => ref.kind === "branch")).toBe(true);
         expect(page.commits[0]?.authorName).toBe("Test");
         expect(page.hasMore).toBe(false);
+      }),
+    );
+
+    it.effect("drops remote-only commits when the remote branches switch is off", () =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const tmp = yield* makeTmpDir();
+        yield* git(remote, ["init", "--bare"]);
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["remote", "add", "origin", remote]);
+        yield* git(tmp, ["push", "-u", "origin", defaultBranch]);
+
+        // A commit that only exists on the remote, then removed locally: it is reachable
+        // from `refs/remotes/origin/<branch>` and nowhere else.
+        const remoteOnly = "only-remote";
+        yield* git(tmp, ["checkout", "-b", remoteOnly]);
+        yield* commitWithDate(
+          tmp,
+          "remote-only.txt",
+          "remote\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "remote only commit",
+        );
+        yield* git(tmp, ["push", "-u", "origin", remoteOnly]);
+        yield* git(tmp, ["fetch", "origin"]);
+        yield* git(tmp, ["checkout", defaultBranch]);
+        yield* git(tmp, ["branch", "-D", remoteOnly]);
+
+        const withRemotes = yield* readHistory(tmp, {});
+        const withoutRemotes = yield* readHistory(tmp, { includeRemoteBranches: false });
+
+        expect(withRemotes.commits.map((commit) => commit.subject)).toContain("remote only commit");
+        expect(withoutRemotes.commits.map((commit) => commit.subject)).not.toContain(
+          "remote only commit",
+        );
       }),
     );
 
