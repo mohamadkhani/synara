@@ -113,8 +113,7 @@ function CommitRowSummary(props: {
 export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   commit: GitHistoryCommit;
   row: GitGraphRow;
-  laneCount: number;
-  /** Lanes this pane can draw; a deeper history collapses to one rail. */
+  /** Lanes this pane can draw; a row past it collapses to one rail. */
   laneCap: number;
   selected: boolean;
   onSelect: (sha: string) => void;
@@ -132,7 +131,10 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   const { commit, row } = props;
   const height = GIT_GRAPH_ROW_HEIGHT;
   const laneWidth = GIT_GRAPH_LANE_WIDTH;
-  const gutter = resolveGitGraphGutter(props.laneCount, props.laneCap);
+  // No separate graph column: the row draws only the lanes it actually has, and its
+  // content starts right after them.
+  const drawnLanes = Math.max(row.topLanes.length, row.bottomLanes.length, 1);
+  const gutter = resolveGitGraphGutter(drawnLanes, props.laneCap);
   const width = gutter.lanes * laneWidth;
   const mid = height / 2;
   const commitColumn = gutter.collapsed ? 0 : drawnColumnIndex(row.topLanes, row.lane);
@@ -314,15 +316,11 @@ export const GitCommitFlatRow = memo(function GitCommitFlatRow(props: {
  */
 export const GitStashRow = memo(function GitStashRow(props: {
   stash: GitStashEntry;
-  laneCount: number;
-  /** Lanes this pane can draw; deeper histories collapse to one rail. */
-  laneCap: number;
   selected?: boolean;
   onSelect?: (stash: GitStashEntry) => void;
   onContextMenu?: (event: ReactMouseEvent) => void;
 }) {
-  const gutterWidth =
-    resolveGitGraphGutter(props.laneCount, props.laneCap).lanes * GIT_GRAPH_LANE_WIDTH;
+  const gutterWidth = GIT_GRAPH_LANE_WIDTH;
   return (
     <button
       type="button"
@@ -363,13 +361,11 @@ export const GitWorkingTreeRow = memo(function GitWorkingTreeRow(props: {
   deletions: number;
   selected: boolean;
   onSelect: () => void;
-  laneCount: number;
-  /** Lanes this pane can draw; deeper histories collapse to one rail. */
-  laneCap: number;
   onContextMenu?: (event: ReactMouseEvent) => void;
 }) {
-  const gutterWidth =
-    resolveGitGraphGutter(props.laneCount, props.laneCap).lanes * GIT_GRAPH_LANE_WIDTH;
+  // The working-tree row has no lanes of its own; its icon sits in the first lane
+  // column and the label follows immediately, like a one-lane commit row.
+  const gutterWidth = GIT_GRAPH_LANE_WIDTH;
   return (
     <button
       type="button"

@@ -252,6 +252,41 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
+  it("starts each row's content after that row's own lanes", async () => {
+    // The first row opens nine lanes; the rows below release them one by one. No row
+    // reserves the widest row's width, so the subject column follows the graph.
+    const parentNames = Array.from({ length: 9 }, (_value, index) => `p${index}`);
+    harness.listCommitHistory.mockResolvedValue({
+      commits: [
+        {
+          ...commit,
+          sha: "1".repeat(40),
+          subject: "nine lanes",
+          parents: parentNames.map((name) => name.padEnd(40, "0")),
+          refs: [],
+        },
+        ...parentNames.map((name) => ({
+          ...commit,
+          sha: name.padEnd(40, "0"),
+          subject: name,
+          parents: [],
+          refs: [],
+        })),
+      ],
+      hasMore: false,
+    });
+    const screen = await mount();
+
+    const widthOf = (title: string) =>
+      page.getByTitle(title).element().querySelector("svg")?.getAttribute("width");
+    await expect.element(page.getByTitle("nine lanes")).toBeVisible();
+    expect(widthOf("nine lanes")).toBe("108");
+    expect(widthOf("p0")).toBe("108");
+    // The last survivor is drawn in the first column, twelve pixels wide.
+    expect(widthOf("p8")).toBe("12");
+    await screen.unmount();
+  });
+
   it("groups remote branches by namespace and filters them by name", async () => {
     harness.listBranches.mockResolvedValue({
       branches: [

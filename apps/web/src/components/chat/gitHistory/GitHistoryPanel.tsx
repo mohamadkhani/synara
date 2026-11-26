@@ -787,8 +787,6 @@ export function GitHistoryPanel(props: {
                   {entry.kind === "stash" ? (
                     <GitStashRow
                       stash={entry.stash}
-                      laneCount={layout.laneCount}
-                      laneCap={laneCap}
                       selected={selectedStash === entry.stash.sha}
                       onSelect={(stash) => selectEntry({ kind: "stash", sha: stash.sha })}
                       onContextMenu={(event) => void showStashContextMenu(entry.stash, event)}
@@ -798,7 +796,6 @@ export function GitHistoryPanel(props: {
                       commit: entry.commit,
                       isSearching,
                       row: rowBySha.get(entry.commit.sha),
-                      laneCount: layout.laneCount,
                       laneCap,
                       remoteNames,
                       selection,
@@ -811,8 +808,6 @@ export function GitHistoryPanel(props: {
                     renderWorkingTreeRow({
                       scope: entry.scope,
                       stats: entry.scope === "staged" ? stagedStats : unstagedStats,
-                      laneCount: layout.laneCount,
-                      laneCap,
                       selection,
                       onSelect: selectEntry,
                       onContextMenu: showWorkingTreeContextMenu,
@@ -935,8 +930,6 @@ export function GitHistoryPanel(props: {
 function renderWorkingTreeRow(input: {
   scope: "staged" | "unstaged";
   stats: { additions: number; deletions: number; fileCount: number } | null;
-  laneCount: number;
-  laneCap: number;
   selection: GitHistorySelection | null;
   onSelect: (next: GitHistorySelection) => void;
   onContextMenu: (scope: GitStashScope, event: ReactMouseEvent) => void;
@@ -949,8 +942,6 @@ function renderWorkingTreeRow(input: {
       fileCount={input.stats?.fileCount ?? 0}
       additions={input.stats?.additions ?? 0}
       deletions={input.stats?.deletions ?? 0}
-      laneCount={input.laneCount}
-      laneCap={input.laneCap}
       selected={input.selection?.kind === "workingTree" && input.selection.scope === input.scope}
       onSelect={() => input.onSelect({ kind: "workingTree", scope: input.scope })}
       onContextMenu={(event) => input.onContextMenu(input.scope, event)}
@@ -962,7 +953,6 @@ function renderCommitRow(input: {
   commit: GitHistoryCommit;
   isSearching: boolean;
   row: ReturnType<typeof layoutGitGraph>["rows"][number] | undefined;
-  laneCount: number;
   laneCap: number;
   remoteNames: readonly string[];
   selection: GitHistorySelection | null;
@@ -993,7 +983,6 @@ function renderCommitRow(input: {
     <GitGraphCommitRow
       commit={input.commit}
       row={input.row}
-      laneCount={input.laneCount}
       laneCap={input.laneCap}
       selected={input.selection?.kind === "commit" && input.selection.sha === input.commit.sha}
       onSelect={(sha) => input.onSelect({ kind: "commit", sha })}
