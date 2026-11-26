@@ -120,11 +120,10 @@ describe("layoutGitGraph", () => {
   });
 });
 
-describe("dense column packing", () => {
-  it("draws the lanes a row keeps side by side instead of leaving empty columns", () => {
-    // Ten branches are open at once, eight of them end, and the surviving two are the
-    // first and the last lane: that row must draw them in columns 0 and 1 even though
-    // the widest row at the top still reserves ten columns.
+describe("row column count", () => {
+  it("keeps every lane in one column instead of redrawing live lanes mid-history", () => {
+    // Ten branches open, then eight end. The survivors keep their own columns, so no
+    // line is redrawn as a diagonal; the row only reserves what it draws.
     const commits = [
       commit("a1", ["x"]),
       ...Array.from({ length: 8 }, (_value, index) => commit(`b${index}`, [`y${index}`])),
@@ -135,32 +134,31 @@ describe("dense column packing", () => {
     ];
     const layout = layoutGitGraph(commits);
     const xRow = layout.rows.find((row) => row.sha === "x");
+    const zRow = layout.rows.find((row) => row.sha === "z");
 
-    expect(xRow?.topLanes).toEqual([0, 9]);
-    expect(xRow?.topLanes.indexOf(9)).toBe(1);
-    expect(xRow?.bottomLanes).toEqual([9]);
-    // The gutter follows the widest drawn row, which is still the ten tips.
+    // Nine tips are alive at the widest row, and no row draws more than that.
     expect(layout.laneCount).toBe(10);
+    expect(zRow?.topColumns).toBe(10);
+    // After the eight `y` roots end, the surviving lanes keep their columns: `x` stays
+    // in lane 0 and `w` in lane 9, so the row reserves both.
+    expect(xRow?.lane).toBe(0);
+    expect(xRow?.topColumns).toBe(10);
+    expect(xRow?.bottomColumns).toBe(10);
   });
 
-  it("reports the slide of a surviving lane into a freed column", () => {
-    const layout = layoutGitGraph([
-      commit("a", ["x"]),
-      commit("b", ["y"]),
-      commit("c", ["v"]),
-      commit("y"),
-      commit("x"),
-      commit("v"),
-    ]);
-    const releasedRow = layout.rows.find((row) => row.sha === "y");
+  it("narrows each row to the lanes it actually draws", () => {
+    const layout = layoutGitGraph([commit("a", ["b"]), commit("b", ["c"]), commit("c")]);
 
-    // Lane 1 (y) is released while lane 2 (v) survives: v moves from column 2 at the
-    // row top to column 1 at the row bottom, which the renderer draws as a diagonal.
-    expect(releasedRow?.throughLanes).toContain(2);
-    expect(releasedRow?.topLanes).toEqual([0, 1, 2]);
-    expect(releasedRow?.bottomLanes).toEqual([0, 2]);
-    expect(releasedRow?.bottomLanes.indexOf(2)).toBe(1);
-    expect(layout.laneCount).toBe(3);
+    expect(layout.rows.map((row) => row.topColumns)).toEqual([1, 1, 1]);
+    expect(layout.laneCount).toBe(1);
+  });
+
+  it("drops a released lane's column once nothing draws it", () => {
+    const layout = layoutGitGraph([commit("a", ["b"]), commit("b")]);
+
+    // The root row releases its lane: nothing is drawn below it.
+    expect(layout.rows[1]?.bottomColumns).toBe(0);
+    expect(layout.laneCount).toBe(1);
   });
 });
 

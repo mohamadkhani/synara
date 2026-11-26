@@ -77,14 +77,14 @@ export interface GitGraphRow {
    */
   readonly releasedLanes: ReadonlyArray<number>;
   /**
-   * Logical lanes in the columns this row actually draws at its top edge, left to
-   * right. A row that keeps lanes 0 and 9 alive draws them in columns 0 and 1, so the
-   * graph does not leave empty columns between branches that are far apart in the
-   * lane numbering. Empty when nothing is drawn above the commit.
+   * Columns this row draws at its top edge, i.e. the highest lane it still shows plus
+   * one. A lane keeps its column for its whole life, so lines stay vertical; a row that
+   * survives on lane 8 still reserves the columns of the lanes it outlived until a new
+   * branch reuses them, which the layout prefers to redrawing live lanes mid-history.
    */
-  readonly topLanes: ReadonlyArray<number>;
-  /** The same column order at the row's bottom edge, after parents and releases. */
-  readonly bottomLanes: ReadonlyArray<number>;
+  readonly topColumns: number;
+  /** Columns this row draws at its bottom edge, after parents and releases. */
+  readonly bottomColumns: number;
 }
 
 export interface GitGraphLayout {
@@ -96,13 +96,12 @@ export interface GitGraphLayout {
   readonly laneCount: number;
 }
 
-/** Logical lanes that are alive in `lanes`, left to right: the drawn column order. */
-function drawnLaneOrder(lanes: ReadonlyArray<string | null>): number[] {
-  const order: number[] = [];
-  for (let index = 0; index < lanes.length; index += 1) {
-    if (lanes[index] !== null) order.push(index);
+/** Columns a lane array draws: the highest live lane plus one, or zero when empty. */
+function drawnColumnCount(lanes: ReadonlyArray<string | null>): number {
+  for (let index = lanes.length - 1; index >= 0; index -= 1) {
+    if (lanes[index] !== null) return index + 1;
   }
-  return order;
+  return 0;
 }
 
 function firstFreeLane(lanes: Array<string | null>): number {
@@ -183,9 +182,9 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
     const releasedLanes = firstParent === null ? [lane] : [];
     if (firstParent === null) releasedLaneIndices.add(lane);
 
-    const topLanes = drawnLaneOrder(before);
-    const bottomLanes = drawnLaneOrder(after);
-    laneCount = Math.max(laneCount, topLanes.length, bottomLanes.length);
+    const topColumns = drawnColumnCount(before);
+    const bottomColumns = drawnColumnCount(after);
+    laneCount = Math.max(laneCount, topColumns, bottomColumns);
 
     rows.push({
       sha: commit.sha,
@@ -195,8 +194,8 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
       parentLanes,
       continuesFromAbove,
       releasedLanes,
-      topLanes,
-      bottomLanes,
+      topColumns,
+      bottomColumns,
     });
 
     // Releasing trailing lanes keeps the gutter narrow without shifting any index

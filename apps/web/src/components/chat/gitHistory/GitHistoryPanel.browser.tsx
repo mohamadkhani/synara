@@ -252,9 +252,9 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
-  it("starts each row's content after that row's own lanes", async () => {
-    // The first row opens nine lanes; the rows below release them one by one. No row
-    // reserves the widest row's width, so the subject column follows the graph.
+  it("starts each row's content after the columns that row draws", async () => {
+    // The first row opens nine lanes and the rows below release them one by one, so each
+    // row reserves only its own columns instead of one gutter for the widest row.
     const parentNames = Array.from({ length: 9 }, (_value, index) => `p${index}`);
     harness.listCommitHistory.mockResolvedValue({
       commits: [
@@ -282,8 +282,9 @@ describe("GitHistoryPanel", () => {
     await expect.element(page.getByTitle("nine lanes")).toBeVisible();
     expect(widthOf("nine lanes")).toBe("108");
     expect(widthOf("p0")).toBe("108");
-    // The last survivor is drawn in the first column, twelve pixels wide.
-    expect(widthOf("p8")).toBe("12");
+    // A lane keeps its column for life, so the last survivor still reserves the columns
+    // of the lanes that lived beside it instead of sliding across them.
+    expect(widthOf("p8")).toBe("108");
     await screen.unmount();
   });
 
