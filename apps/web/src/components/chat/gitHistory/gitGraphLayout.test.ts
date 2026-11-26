@@ -80,6 +80,39 @@ describe("layoutGitGraph", () => {
     expect(layout.laneCount).toBe(1);
   });
 
+  it("starts a lane at its own dot when its column sat empty above", () => {
+    // `z` ends lane 2 while lanes 0 and 1 stay alive for two more rows, and the later tip
+    // lands in that empty column. A line from the row top would join nothing.
+    const layout = layoutGitGraph([
+      commit("root", ["x", "y", "z"]),
+      commit("z", []),
+      commit("x", ["x2"]),
+      commit("y", ["y2"]),
+      commit("tip", []),
+      commit("x2", []),
+      commit("y2", []),
+    ]);
+    const tipRow = layout.rows.find((row) => row.sha === "tip");
+
+    expect(tipRow?.lane).toBe(2);
+    expect(tipRow?.continuesFromAbove).toBe(false);
+    expect(tipRow?.releasedLanes).toEqual([2]);
+  });
+
+  it("connects to the stub when a lane is reused on the very next row", () => {
+    const layout = layoutGitGraph([
+      commit("root", ["keep", "a"]),
+      commit("a", []),
+      commit("tip", ["t2"]),
+      commit("keep", []),
+      commit("t2", []),
+    ]);
+    const tipRow = layout.rows.find((row) => row.sha === "tip");
+
+    expect(tipRow?.lane).toBe(1);
+    expect(tipRow?.continuesFromAbove).toBe(true);
+  });
+
   it("does not flag a real root as continuing below", () => {
     const layout = layoutGitGraph([commit("a", ["b"]), commit("b", [])]);
 
@@ -155,6 +188,28 @@ describe("lane colours", () => {
     expect(colourOf("a")).not.toBeNull();
     expect(colourOf("c")).not.toBeNull();
     expect(colourOf("a")).not.toBe(colourOf("c"));
+  });
+
+  it("never repeats the column's previous colour, even when the palette is busy", () => {
+    // Ten lanes fill the palette, one is released, and a later branch takes its column.
+    // The only free colour is the one that column just had, which must not come back.
+    const commits = [
+      commit(
+        "tip",
+        Array.from({ length: 10 }, (_value, index) => `p${index}`),
+      ),
+      ...Array.from({ length: 10 }, (_value, index) => commit(`p${index}`, [])),
+      commit("later", []),
+    ];
+    const layout = layoutGitGraph(commits);
+    const releasedRow = layout.rows.find((row) => row.sha === "p0");
+    const releasedColour = releasedRow?.topLaneColors[releasedRow.lane];
+    const laterRow = layout.rows.find((row) => row.sha === "later");
+    const laterColour = laterRow?.topLaneColors[laterRow.lane ?? 0];
+
+    expect(releasedColour).not.toBeNull();
+    expect(laterRow?.lane).toBe(releasedRow?.lane);
+    expect(laterColour).not.toBe(releasedColour);
   });
 
   it("keeps concurrent lanes on different colours", () => {

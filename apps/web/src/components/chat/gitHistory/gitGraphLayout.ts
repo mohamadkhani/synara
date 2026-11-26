@@ -162,13 +162,31 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
   const lanes: Array<string | null> = [];
   // Colour of each lane slot, kept in step with `lanes` so a column that a later branch
   // reuses does not continue the previous occupant's colour.
+  // Colour of each column's last occupant, kept after the lane is released so the next
+  // branch in that column can be given a different one: two branches sharing a column
+  // with the same colour read as one line that was cut in the middle.
   const laneColors: Array<number | null> = [];
   let nextColorIndex = 0;
-  const takeLaneColor = (): number => {
-    const inUse = new Set(laneColors.filter((color): color is number => color !== null));
+  const takeLaneColor = (column: number): number => {
+    const inUse = new Set<number>();
+    lanes.forEach((sha, index) => {
+      const color = sha === null ? null : laneColors[index];
+      if (color !== null && color !== undefined) inUse.add(color);
+    });
+    const previous = laneColors[column] ?? null;
+    // Prefer a colour no open lane uses; then one this column did not have before.
+    for (const skipPrevious of [true, false]) {
+      for (let offset = 0; offset < LANE_COLOR_COUNT; offset += 1) {
+        const candidate = (nextColorIndex + offset) % LANE_COLOR_COUNT;
+        if (inUse.has(candidate)) continue;
+        if (skipPrevious && candidate === previous) continue;
+        nextColorIndex = (candidate + 1) % LANE_COLOR_COUNT;
+        return candidate;
+      }
+    }
     for (let offset = 0; offset < LANE_COLOR_COUNT; offset += 1) {
       const candidate = (nextColorIndex + offset) % LANE_COLOR_COUNT;
-      if (!inUse.has(candidate)) {
+      if (candidate !== previous) {
         nextColorIndex = (candidate + 1) % LANE_COLOR_COUNT;
         return candidate;
       }
@@ -179,13 +197,14 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
   };
   const releaseLane = (index: number) => {
     lanes[index] = null;
-    laneColors[index] = null;
+    // `laneColors[index]` stays: it is what the next branch in this column must avoid.
   };
   const rows: GitGraphRow[] = [];
-  // Lane indices released by an earlier row and not yet reused. Reusing one draws the
-  // new commit's line from the row top, so the reused column stays continuous instead
-  // of leaving a half-row gap at the boundary.
-  const releasedLaneIndices = new Set<number>();
+  // Columns the previous row drew at its bottom edge: lanes still open plus the stub of
+  // one that ended there. A lane opened now continues from above only when it lands in
+  // one of those columns, so a column that sat empty for a while starts at its own dot
+  // instead of drawing a line that connects to nothing.
+  let previousBottomColumns = new Set<number>();
   let laneCount = 0;
 
   for (const commit of commits) {
@@ -198,12 +217,9 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
         commit.parents[0] === undefined ? -1 : lanes.indexOf(commit.parents[0]);
       lane =
         trackedParentLane >= 0 ? nearestFreeLane(lanes, trackedParentLane) : firstFreeLane(lanes);
-      if (releasedLaneIndices.has(lane)) {
-        continuesFromAbove = true;
-        releasedLaneIndices.delete(lane);
-      }
+      continuesFromAbove = previousBottomColumns.has(lane);
       lanes[lane] = commit.sha;
-      laneColors[lane] = takeLaneColor();
+      laneColors[lane] = takeLaneColor(lane);
     }
     const before = lanes.slice();
     // Colours as they stand at the row's top edge: a lane's colour only changes when the
@@ -216,12 +232,10 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
         incomingLanes.push(index);
       }
     }
-    // Collapsed lanes stop expecting the commit; their rows curve into the dot.
+    // Collapsed lanes stop expecting the commit; their rows curve into the dot, so a
+    // later commit reusing the column starts a new line rather than continuing it.
     for (const index of incomingLanes) {
       releaseLane(index);
-      // A collapsed lane is not a released lane: its line curved into the dot, so a
-      // later commit reusing the index starts a new line rather than continuing it.
-      releasedLaneIndices.delete(index);
     }
 
     const after = lanes;
@@ -240,8 +254,7 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
       if (existing >= 0) return existing;
       const free = nearestFreeLane(after, lane);
       after[free] = parentSha;
-      laneColors[free] = takeLaneColor();
-      releasedLaneIndices.delete(free);
+      laneColors[free] = takeLaneColor(free);
       return free;
     };
 
@@ -265,7 +278,6 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
 
     // A root, or a parent the reader has not loaded, ends the lane at this row.
     const releasedLanes = after[lane] === null && before[lane] !== null ? [lane] : [];
-    if (firstParent === null) releasedLaneIndices.add(lane);
 
     const continuesBelow = firstParent !== null && !loaded.has(firstParent);
     const topColumns = drawnColumnCount(before);
@@ -288,11 +300,17 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
       bottomLaneColors,
     });
 
+    const drawnAtBottom = new Set<number>(releasedLanes);
+    for (let index = 0; index < after.length; index += 1) {
+      if (after[index] !== null) drawnAtBottom.add(index);
+    }
+    previousBottomColumns = drawnAtBottom;
+
     // Releasing trailing lanes keeps the gutter narrow without shifting any index
     // that earlier rows already drew at.
     while (after.length > 0 && after[after.length - 1] === null) {
       after.pop();
-      laneColors.pop();
+      // `laneColors` keeps the column's last colour so a future branch there differs.
     }
   }
 
