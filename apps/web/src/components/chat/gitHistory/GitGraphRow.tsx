@@ -103,10 +103,8 @@ function CommitRowSummary(props: {
 export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   commit: GitHistoryCommit;
   row: GitGraphRow;
-  /** Lanes this pane can draw. */
+  /** Lanes this pane can draw; deeper lanes of this row are left out. */
   laneCap: number;
-  /** True when the history needs a rail everywhere, so every row draws the same shape. */
-  collapsed: boolean;
   selected: boolean;
   onSelect: (sha: string) => void;
   authorLabel: string;
@@ -125,13 +123,14 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   const laneWidth = GIT_GRAPH_LANE_WIDTH;
   // No separate graph column: the row draws only the columns it actually uses, and its
   // content starts right after them. Lanes keep their column for life, so every line
-  // stays vertical.
+  // stays vertical. A row deeper than the pane can draw leaves the extra lanes out.
   const rowColumns = Math.max(row.topColumns, row.bottomColumns, 1);
-  const gutter = resolveGitGraphGutter(rowColumns, props.collapsed ? 0 : props.laneCap);
+  const gutter = resolveGitGraphGutter(rowColumns, props.laneCap);
   const width = gutter.lanes * laneWidth;
   const mid = height / 2;
-  const commitColumn = gutter.collapsed ? 0 : row.lane;
+  const commitColumn = Math.min(row.lane, gutter.lanes - 1);
   const commitX = laneCenter(commitColumn, laneWidth);
+  const laneFits = (lane: number) => lane < gutter.lanes;
   const color = gitGraphLaneColor(row.lane);
   const isCheckedOut = commit.refs.some((ref) => ref.kind === "head");
 
@@ -157,17 +156,7 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
         className="shrink-0"
         aria-hidden="true"
       >
-        {gutter.collapsed ? (
-          // Too many parallel branches to draw truthfully. A single muted rail keeps
-          // every commit anchored without inventing merges onto a flattened last lane.
-          <path
-            d={`M ${commitX} 0 L ${commitX} ${height}`}
-            stroke="var(--color-border)"
-            strokeWidth={1}
-            fill="none"
-          />
-        ) : null}
-        {!gutter.collapsed && row.continuesFromAbove ? (
+        {row.continuesFromAbove ? (
           <path
             d={`M ${commitX} 0 L ${commitX} ${mid}`}
             stroke={color}
@@ -175,52 +164,44 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
             fill="none"
           />
         ) : null}
-        {gutter.collapsed
-          ? null
-          : row.throughLanes.map((lane) => (
-              <path
-                key={`through-${lane}`}
-                d={`M ${laneCenter(lane, laneWidth)} 0 L ${laneCenter(lane, laneWidth)} ${height}`}
-                stroke={gitGraphLaneColor(lane)}
-                strokeWidth={2}
-                fill="none"
-              />
-            ))}
-        {gutter.collapsed
-          ? null
-          : row.incomingLanes.map((lane) => (
-              <path
-                key={`incoming-${lane}`}
-                d={buildCurve(lane, commitColumn, 0, mid, laneWidth)}
-                stroke={gitGraphLaneColor(lane)}
-                strokeWidth={2}
-                fill="none"
-              />
-            ))}
-        {gutter.collapsed
-          ? null
-          : row.parentLanes.map((lane) => (
-              <path
-                key={`parent-${lane}`}
-                d={buildCurve(commitColumn, lane, mid, height, laneWidth)}
-                // The edge into a merged branch carries that branch's lane color, so a
-                // merge does not paint the incoming side with the target branch's hue.
-                stroke={gitGraphLaneColor(lane)}
-                strokeWidth={2}
-                fill="none"
-              />
-            ))}
-        {gutter.collapsed
-          ? null
-          : row.releasedLanes.map((lane) => (
-              <path
-                key={`released-${lane}`}
-                d={`M ${commitX} ${mid} L ${commitX} ${height}`}
-                stroke={gitGraphLaneColor(lane)}
-                strokeWidth={2}
-                fill="none"
-              />
-            ))}
+        {row.throughLanes.filter(laneFits).map((lane) => (
+          <path
+            key={`through-${lane}`}
+            d={`M ${laneCenter(lane, laneWidth)} 0 L ${laneCenter(lane, laneWidth)} ${height}`}
+            stroke={gitGraphLaneColor(lane)}
+            strokeWidth={2}
+            fill="none"
+          />
+        ))}
+        {row.incomingLanes.filter(laneFits).map((lane) => (
+          <path
+            key={`incoming-${lane}`}
+            d={buildCurve(lane, commitColumn, 0, mid, laneWidth)}
+            stroke={gitGraphLaneColor(lane)}
+            strokeWidth={2}
+            fill="none"
+          />
+        ))}
+        {row.parentLanes.filter(laneFits).map((lane) => (
+          <path
+            key={`parent-${lane}`}
+            d={buildCurve(commitColumn, lane, mid, height, laneWidth)}
+            // The edge into a merged branch carries that branch's lane color, so a
+            // merge does not paint the incoming side with the target branch's hue.
+            stroke={gitGraphLaneColor(lane)}
+            strokeWidth={2}
+            fill="none"
+          />
+        ))}
+        {row.releasedLanes.filter(laneFits).map((lane) => (
+          <path
+            key={`released-${lane}`}
+            d={`M ${commitX} ${mid} L ${commitX} ${height}`}
+            stroke={gitGraphLaneColor(lane)}
+            strokeWidth={2}
+            fill="none"
+          />
+        ))}
         <circle
           cx={commitX}
           cy={mid}

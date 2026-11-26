@@ -14,7 +14,7 @@ export const GIT_GRAPH_LANE_WIDTH = 12;
  * message readable.
  */
 export const GIT_GRAPH_MIN_LANE_CAP = 6;
-export const GIT_GRAPH_MAX_LANE_CAP = 18;
+export const GIT_GRAPH_MAX_LANE_CAP = 24;
 /** Share of the pane the gutter may take before the message column starves. */
 const GIT_GRAPH_GUTTER_WIDTH_RATIO = 0.35;
 
@@ -32,18 +32,19 @@ export interface GitGraphGutter {
   /** Columns the gutter draws. */
   readonly lanes: number;
   /**
-   * True when the history has more lanes than the gutter can draw. The renderer then
-   * draws a single rail instead of flattening deep lanes onto the last column, which
-   * would draw merges that do not exist.
+   * True when the row draws more lanes than the gutter has room for. Those lanes are
+   * left out (deep lines are clipped, not flattened onto the last column, which would
+   * draw merges that do not exist) and the hint above the list says so.
    */
-  readonly collapsed: boolean;
+  readonly clipped: boolean;
 }
 
-/** Columns the gutter draws for a layout, and whether that required collapsing. */
+/** Columns the gutter draws for a row, and whether deeper lanes had to be left out. */
 export function resolveGitGraphGutter(laneCount: number, laneCap: number): GitGraphGutter {
   const cap = Math.max(1, Math.floor(laneCap));
-  if (laneCount > cap) return { lanes: 1, collapsed: true };
-  return { lanes: Math.max(1, laneCount), collapsed: false };
+  return laneCount > cap
+    ? { lanes: cap, clipped: true }
+    : { lanes: Math.max(1, laneCount), clipped: false };
 }
 
 export interface GitGraphCommitInput {

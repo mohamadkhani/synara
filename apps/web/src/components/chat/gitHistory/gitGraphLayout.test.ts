@@ -166,26 +166,23 @@ describe("lane gutter sizing", () => {
   it("grows the lane cap with the pane width, within bounds", () => {
     expect(resolveGitGraphLaneCap(0)).toBe(GIT_GRAPH_MIN_LANE_CAP);
     expect(resolveGitGraphLaneCap(Number.NaN)).toBe(GIT_GRAPH_MIN_LANE_CAP);
-    // A narrow pane keeps the small cap so the message column survives.
     expect(resolveGitGraphLaneCap(120)).toBe(GIT_GRAPH_MIN_LANE_CAP);
     // 600px * 0.35 / 12px = 17 columns.
     expect(resolveGitGraphLaneCap(600)).toBe(17);
-    // A very wide pane stops at the ceiling.
     expect(resolveGitGraphLaneCap(4000)).toBe(GIT_GRAPH_MAX_LANE_CAP);
   });
 
-  it("draws every lane when the history fits the cap", () => {
-    expect(resolveGitGraphGutter(0, 10)).toEqual({ lanes: 1, collapsed: false });
-    expect(resolveGitGraphGutter(3, 10)).toEqual({ lanes: 3, collapsed: false });
-    expect(resolveGitGraphGutter(10, 10)).toEqual({ lanes: 10, collapsed: false });
+  it("draws every lane when the row fits the cap", () => {
+    expect(resolveGitGraphGutter(0, 10)).toEqual({ lanes: 1, clipped: false });
+    expect(resolveGitGraphGutter(3, 10)).toEqual({ lanes: 3, clipped: false });
+    expect(resolveGitGraphGutter(10, 10)).toEqual({ lanes: 10, clipped: false });
   });
 
-  it("collapses to one rail instead of flattening deeper lanes", () => {
+  it("clips the lanes a narrow pane cannot draw instead of flattening them", () => {
     // Flattening 400 lanes onto the last column would draw merges that do not exist.
-    expect(resolveGitGraphGutter(11, 10)).toEqual({ lanes: 1, collapsed: true });
-    expect(resolveGitGraphGutter(400, 10)).toEqual({ lanes: 1, collapsed: true });
-    // A degenerate cap still renders one rail rather than zero columns.
-    expect(resolveGitGraphGutter(4, 0)).toEqual({ lanes: 1, collapsed: true });
+    expect(resolveGitGraphGutter(11, 10)).toEqual({ lanes: 10, clipped: true });
+    expect(resolveGitGraphGutter(400, 10)).toEqual({ lanes: 10, clipped: true });
+    expect(resolveGitGraphGutter(4, 0)).toEqual({ lanes: 1, clipped: true });
   });
 
   it("keeps the gutter proportional to the drawn columns", () => {

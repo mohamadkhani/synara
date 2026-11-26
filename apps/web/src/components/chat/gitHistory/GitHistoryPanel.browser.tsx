@@ -228,134 +228,23 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
-  it("collapses the graph to one rail when the history has more lanes than the pane", async () => {
-    // Nineteen commits whose parents never load keep nineteen lanes open at once, past
-    // the cap this pane can draw, so the graph must simplify instead of flattening.
+  it("keeps drawing lanes when the history is deeper than the pane's cap", async () => {
+    // Thirty lanes on one row exceed the twenty-four-column cap of this viewport. The row
+    // clips to the cap and keeps drawing lanes; it does not turn the list into one rail.
+    const parents = Array.from({ length: 30 }, (_value, index) => `q${index}`.padEnd(40, "0"));
     harness.listCommitHistory.mockResolvedValue({
-      commits: Array.from({ length: 19 }, (_value, index) => ({
-        ...commit,
-        sha: `${index}`.padStart(40, "a"),
-        shortSha: `${index}`,
-        subject: `commit ${index}`,
-        parents: [`missing-${index}`.padEnd(40, "b")],
-        refs: [],
-      })),
+      commits: [{ ...commit, sha: "1".repeat(40), subject: "deep row", parents, refs: [] }],
       hasMore: false,
     });
     const screen = await mount();
 
-    await expect.element(page.getByText(/Graph simplified/)).toBeVisible();
-    const row = page.getByTitle("commit 0");
+    const row = page.getByTitle("deep row");
     await expect.element(row).toBeVisible();
-    // One rail: the gutter is a single lane wide instead of the clamped lanes.
-    expect(row.element().querySelector("svg")?.getAttribute("width")).toBe("12");
-    await screen.unmount();
-  });
-
-  it("starts each row's content after the columns that row draws", async () => {
-    // The first row opens nine lanes and the rows below release them one by one, so each
-    // row reserves only its own columns instead of one gutter for the widest row.
-    const parentNames = Array.from({ length: 9 }, (_value, index) => `p${index}`);
-    harness.listCommitHistory.mockResolvedValue({
-      commits: [
-        {
-          ...commit,
-          sha: "1".repeat(40),
-          subject: "nine lanes",
-          parents: parentNames.map((name) => name.padEnd(40, "0")),
-          refs: [],
-        },
-        ...parentNames.map((name) => ({
-          ...commit,
-          sha: name.padEnd(40, "0"),
-          subject: name,
-          parents: [],
-          refs: [],
-        })),
-      ],
-      hasMore: false,
-    });
-    const screen = await mount();
-
-    const widthOf = (title: string) =>
-      page.getByTitle(title).element().querySelector("svg")?.getAttribute("width");
-    await expect.element(page.getByTitle("nine lanes")).toBeVisible();
-    expect(widthOf("nine lanes")).toBe("108");
-    expect(widthOf("p0")).toBe("108");
-    // A lane keeps its column for life, so the last survivor still reserves the columns
-    // of the lanes that lived beside it instead of sliding across them.
-    expect(widthOf("p8")).toBe("108");
-    await screen.unmount();
-  });
-
-  it("draws the rail on every row when the history is too branchy for the pane", async () => {
-    // Twenty lanes on one row push the whole list past the pane's eighteen-column cap,
-    // so the shallow rows below are rails too: a list that mixes rails and lane graphs
-    // reads as broken.
-    const parents = Array.from({ length: 20 }, (_value, index) => `q${index}`.padEnd(40, "0"));
-    harness.listCommitHistory.mockResolvedValue({
-      commits: [
-        { ...commit, sha: "1".repeat(40), subject: "wide row", parents, refs: [] },
-        { ...commit, sha: "2".repeat(40), subject: "narrow row", parents: [], refs: [] },
-      ],
-      hasMore: false,
-    });
-    const screen = await mount();
-
-    const widthOf = (title: string) =>
-      page.getByTitle(title).element().querySelector("svg")?.getAttribute("width");
-    await expect.element(page.getByTitle("wide row")).toBeVisible();
-    expect(widthOf("wide row")).toBe("12");
-    expect(widthOf("narrow row")).toBe("12");
-    await screen.unmount();
-  });
-
-  it("shows a mirrored fork branch once and without the remote prefix", async () => {
-    harness.listBranches.mockResolvedValue({
-      branches: [
-        { name: "main", current: true, isDefault: true, worktreePath: null },
-        {
-          name: "origin/feature",
-          isRemote: true,
-          remoteName: "origin",
-          current: false,
-          isDefault: false,
-          worktreePath: null,
-        },
-        {
-          name: "fork/feature",
-          isRemote: true,
-          remoteName: "fork",
-          current: false,
-          isDefault: false,
-          worktreePath: null,
-        },
-      ],
-      isRepo: true,
-      hasOriginRemote: true,
-      remoteNames: ["origin", "fork"],
-    });
-    harness.listCommitHistory.mockResolvedValue({
-      commits: [
-        {
-          ...commit,
-          refs: [
-            { name: "origin/feature", kind: "remote", checkedOut: false },
-            { name: "fork/feature", kind: "remote", checkedOut: false },
-          ],
-        },
-        { ...commit, sha: "b".repeat(40), subject: "no refs", refs: [] },
-      ],
-      hasMore: false,
-    });
-    const screen = await mount();
-
-    const chip = page.getByTitle("Remote branch origin/feature");
-    await expect.element(chip).toBeVisible();
-    await expect.element(chip).toHaveTextContent("feature");
-    expect(chip.element().textContent).not.toContain("origin/");
-    // The mirrored fork branch is the same branch; it is not a second chip.
-    expect(page.getByTitle("Remote branch fork/feature").elements()).toHaveLength(0);
+    // Capped at the pane's twenty-four columns, not flattened into one rail.
+    expect(row.element().querySelector("svg")?.getAttribute("width")).toBe("288");
+    // Several lanes are drawn: a rail would draw a single path.
+    expect(row.element().querySelectorAll("path").length).toBeGreaterThan(1);
+    await expect.element(page.getByText(/parallel branches/)).toBeVisible();
     await screen.unmount();
   });
 

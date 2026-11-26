@@ -338,7 +338,8 @@ export function GitHistoryPanel(props: {
   // rather than flattening deep lanes onto the last column.
   const rootSize = useContainerSize(rootElement);
   const laneCap = resolveGitGraphLaneCap(rootSize?.width ?? 0);
-  const graphCollapsed = layout.laneCount > laneCap;
+  // Only the rows that need more lanes than the pane can draw leave lanes out.
+  const graphClipped = layout.laneCount > laneCap;
 
   const normalizedSearch = deferredSearch.trim().toLowerCase();
   const isSearching = normalizedSearch.length > 0;
@@ -738,9 +739,12 @@ export function GitHistoryPanel(props: {
         </Alert>
       ) : null}
 
-      {graphCollapsed ? (
+      {graphClipped ? (
         <p className="shrink-0 px-1.5 pb-1 text-ui-xs text-muted-foreground">
-          {t("git:historyGraphSimplified", { value0: layout.laneCount })}
+          {t("git:historyGraphSimplified", {
+            value0: laneCap,
+            value1: layout.laneCount,
+          })}
         </p>
       ) : null}
 
@@ -797,7 +801,6 @@ export function GitHistoryPanel(props: {
                       isSearching,
                       row: rowBySha.get(entry.commit.sha),
                       laneCap,
-                      graphCollapsed,
                       remoteNames,
                       selection,
                       onSelect: selectEntry,
@@ -955,7 +958,6 @@ function renderCommitRow(input: {
   isSearching: boolean;
   row: ReturnType<typeof layoutGitGraph>["rows"][number] | undefined;
   laneCap: number;
-  graphCollapsed: boolean;
   remoteNames: readonly string[];
   selection: GitHistorySelection | null;
   onSelect: (next: GitHistorySelection) => void;
@@ -986,7 +988,6 @@ function renderCommitRow(input: {
       commit={input.commit}
       row={input.row}
       laneCap={input.laneCap}
-      collapsed={input.graphCollapsed}
       selected={input.selection?.kind === "commit" && input.selection.sha === input.commit.sha}
       onSelect={(sha) => input.onSelect({ kind: "commit", sha })}
       authorLabel={input.commit.authorName}
