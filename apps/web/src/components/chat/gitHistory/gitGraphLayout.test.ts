@@ -76,7 +76,15 @@ describe("layoutGitGraph", () => {
 
     expect(layout.rows[0]?.parentLanes).toEqual([]);
     expect(layout.rows[0]?.releasedLanes).toEqual([0]);
+    expect(layout.rows[0]?.continuesBelow).toBe(true);
     expect(layout.laneCount).toBe(1);
+  });
+
+  it("does not flag a real root as continuing below", () => {
+    const layout = layoutGitGraph([commit("a", ["b"]), commit("b", [])]);
+
+    expect(layout.rows[0]?.continuesBelow).toBe(false);
+    expect(layout.rows[1]?.continuesBelow).toBe(false);
   });
 
   it("reuses a released lane instead of growing the gutter forever", () => {

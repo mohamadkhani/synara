@@ -264,6 +264,34 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
+  it("marks a lane that stops at the loaded page boundary as continuing", async () => {
+    // The commit's parent is in a page the reader has not opened, so its line ends here.
+    // The stub is dashed so the end reads as "continues below", not as a broken line.
+    harness.listCommitHistory.mockResolvedValue({
+      commits: [
+        {
+          ...commit,
+          sha: "1".repeat(40),
+          subject: "page boundary",
+          parents: ["9".repeat(40)],
+          refs: [],
+        },
+        { ...commit, sha: "2".repeat(40), subject: "loaded root", parents: [], refs: [] },
+      ],
+      hasMore: true,
+    });
+    const screen = await mount();
+
+    const row = page.getByTitle("page boundary");
+    await expect.element(row).toBeVisible();
+    expect(row.element().querySelector("path[stroke-dasharray]")).not.toBeNull();
+    // A real root ends cleanly, with no dashed tail.
+    expect(
+      page.getByTitle("loaded root").element().querySelectorAll("path[stroke-dasharray]").length,
+    ).toBe(0);
+    await screen.unmount();
+  });
+
   it("groups remote branches by namespace and filters them by name", async () => {
     harness.listBranches.mockResolvedValue({
       branches: [

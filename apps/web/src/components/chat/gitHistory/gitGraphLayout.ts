@@ -78,6 +78,12 @@ export interface GitGraphRow {
    */
   readonly releasedLanes: ReadonlyArray<number>;
   /**
+   * True when the commit's parent is not in the loaded commits, so its lane ends at this
+   * row only because the reader has not opened the page that holds the parent. The
+   * renderer marks the stub as continuing rather than finished.
+   */
+  readonly continuesBelow: boolean;
+  /**
    * Columns this row draws at its top edge, i.e. the highest lane it still shows plus
    * one. A lane keeps its column for its whole life, so lines stay vertical; a row that
    * survives on lane 8 still reserves the columns of the lanes it outlived until a new
@@ -219,6 +225,7 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
     const releasedLanes = after[lane] === null ? [lane] : [];
     if (firstParent === null) releasedLaneIndices.add(lane);
 
+    const continuesBelow = firstParent !== null && !loaded.has(firstParent);
     const topColumns = drawnColumnCount(before);
     const bottomColumns = drawnColumnCount(after);
     laneCount = Math.max(laneCount, topColumns, bottomColumns);
@@ -231,6 +238,7 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
       parentLanes,
       continuesFromAbove,
       releasedLanes,
+      continuesBelow,
       topColumns,
       bottomColumns,
     });

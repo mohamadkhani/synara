@@ -472,5 +472,6 @@
   "historyWorktreeActive": "Active",
   "historyWorktreeArchived": "Archived",
   "historyWorktreeShowArchived": "Show archived and unused worktrees ({{value0}})",
-  "historyWorktreeHideArchived": "Hide archived and unused worktrees"
+  "historyWorktreeHideArchived": "Hide archived and unused worktrees",
+  "historyGraphContinuesBelow": "This branch continues in a page that is not loaded yet; load more to follow it."
 }

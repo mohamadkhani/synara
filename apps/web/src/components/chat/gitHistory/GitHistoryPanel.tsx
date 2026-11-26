@@ -801,6 +801,7 @@ export function GitHistoryPanel(props: {
                       isSearching,
                       row: rowBySha.get(entry.commit.sha),
                       laneCap,
+                      pendingParentTitle: t("git:historyGraphContinuesBelow"),
                       remoteNames,
                       selection,
                       onSelect: selectEntry,
@@ -958,6 +959,7 @@ function renderCommitRow(input: {
   isSearching: boolean;
   row: ReturnType<typeof layoutGitGraph>["rows"][number] | undefined;
   laneCap: number;
+  pendingParentTitle: string;
   remoteNames: readonly string[];
   selection: GitHistorySelection | null;
   onSelect: (next: GitHistorySelection) => void;
@@ -988,6 +990,7 @@ function renderCommitRow(input: {
       commit={input.commit}
       row={input.row}
       laneCap={input.laneCap}
+      pendingParentTitle={input.pendingParentTitle}
       selected={input.selection?.kind === "commit" && input.selection.sha === input.commit.sha}
       onSelect={(sha) => input.onSelect({ kind: "commit", sha })}
       authorLabel={input.commit.authorName}

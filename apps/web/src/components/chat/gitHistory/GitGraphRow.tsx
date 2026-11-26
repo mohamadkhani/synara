@@ -105,6 +105,8 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   row: GitGraphRow;
   /** Lanes this pane can draw; deeper lanes of this row are left out. */
   laneCap: number;
+  /** Tooltip for a lane that only stops because its parent is not loaded yet. */
+  pendingParentTitle?: string;
   selected: boolean;
   onSelect: (sha: string) => void;
   authorLabel: string;
@@ -156,6 +158,9 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
         className="shrink-0"
         aria-hidden="true"
       >
+        {row.continuesBelow && props.pendingParentTitle ? (
+          <title>{props.pendingParentTitle}</title>
+        ) : null}
         {row.continuesFromAbove ? (
           <path
             d={`M ${commitX} 0 L ${commitX} ${mid}`}
@@ -200,6 +205,10 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
             stroke={gitGraphLaneColor(lane)}
             strokeWidth={2}
             fill="none"
+            // A lane that stops only because its parent sits in a page the reader has
+            // not opened keeps a dashed tail, so the end reads as "continues below"
+            // rather than as a broken line.
+            {...(row.continuesBelow ? { strokeDasharray: "3 3" } : {})}
           />
         ))}
         <circle
