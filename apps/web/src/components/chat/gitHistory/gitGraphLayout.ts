@@ -111,6 +111,22 @@ function firstFreeLane(lanes: Array<string | null>): number {
 }
 
 /**
+ * Free lane closest to `target`, preferring lower indices on a tie. Opening a branch
+ * beside the lane it forks from keeps its edge short; the leftmost free lane instead
+ * parks it next to an unrelated branch, and the edge then sweeps across the whole graph.
+ */
+function nearestFreeLane(lanes: Array<string | null>, target: number): number {
+  if (!lanes.includes(null)) return lanes.length;
+  for (let distance = 0; distance <= lanes.length; distance += 1) {
+    const left = target - distance;
+    if (left >= 0 && lanes[left] === null) return left;
+    const right = target + distance;
+    if (distance > 0 && right < lanes.length && lanes[right] === null) return right;
+  }
+  return lanes.length;
+}
+
+/**
  * Lay out a commit graph in topological order (every parent appears after its
  * children, as `git log --topo-order` guarantees).
  *
@@ -119,6 +135,12 @@ function firstFreeLane(lanes: Array<string | null>): number {
  * released so long histories keep a narrow gutter.
  */
 export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): GitGraphLayout {
+  // A lane is a line to a parent. When the parent is not among the loaded commits (an
+  // older page the reader has not opened, or a ref the walk excludes) the line has
+  // nowhere to go, so the branch ends as a stub instead of holding a column open for
+  // hundreds of rows. This is what keeps a walk over hundreds of branch tips readable:
+  // only connections inside the loaded window need a lane.
+  const loaded = new Set(commits.map((commit) => commit.sha));
   const lanes: Array<string | null> = [];
   const rows: GitGraphRow[] = [];
   // Lane indices released by an earlier row and not yet reused. Reusing one draws the
@@ -131,7 +153,12 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
     let lane = lanes.indexOf(commit.sha);
     let continuesFromAbove = lane >= 0;
     if (lane < 0) {
-      lane = firstFreeLane(lanes);
+      // A tip that continues a branch already tracked opens beside that lane, so the
+      // two lines connect over one column instead of sweeping across the history.
+      const trackedParentLane =
+        commit.parents[0] === undefined ? -1 : lanes.indexOf(commit.parents[0]);
+      lane =
+        trackedParentLane >= 0 ? nearestFreeLane(lanes, trackedParentLane) : firstFreeLane(lanes);
       if (releasedLaneIndices.has(lane)) {
         continuesFromAbove = true;
         releasedLaneIndices.delete(lane);
@@ -156,19 +183,27 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
 
     const after = lanes;
     const firstParent = commit.parents[0] ?? null;
-    after[lane] = firstParent;
+    after[lane] = firstParent !== null && loaded.has(firstParent) ? firstParent : null;
 
-    const targetForParent = (parentSha: string): number => {
+    const targetForParent = (parentSha: string): number | null => {
+      // A parent outside the loaded window gets no lane: see `loaded` above.
+      if (!loaded.has(parentSha)) return null;
       if (after[lane] === parentSha) return lane;
       const existing = after.indexOf(parentSha);
       if (existing >= 0) return existing;
-      const free = firstFreeLane(after);
+      const free = nearestFreeLane(after, lane);
       after[free] = parentSha;
       releasedLaneIndices.delete(free);
       return free;
     };
 
-    const parentLanes = [...new Set(commit.parents.map((parent) => targetForParent(parent)))];
+    const parentLanes = [
+      ...new Set(
+        commit.parents
+          .map((parent) => targetForParent(parent))
+          .filter((parentLane): parentLane is number => parentLane !== null),
+      ),
+    ];
 
     const throughLanes: number[] = [];
     for (let index = 0; index < before.length; index += 1) {
@@ -180,7 +215,8 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
       }
     }
 
-    const releasedLanes = firstParent === null ? [lane] : [];
+    // A root, or a parent the reader has not loaded, ends the lane at this row.
+    const releasedLanes = after[lane] === null ? [lane] : [];
     if (firstParent === null) releasedLaneIndices.add(lane);
 
     const topColumns = drawnColumnCount(before);

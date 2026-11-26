@@ -67,12 +67,16 @@ describe("layoutGitGraph", () => {
     expect(layout.rows[4]?.lane).toBe(0);
   });
 
-  it("keeps unresolved parents from a truncated page off the commit lane", () => {
-    // A page boundary: the parent exists but was not loaded yet.
+  it("ends the lane when the parent is not in the loaded window", () => {
+    // A page boundary: the parent exists in the repository but was not loaded, so no
+    // line can be drawn to it. Holding its lane open is what turned a walk over hundreds
+    // of branch tips into hundreds of parallel lanes, so the branch ends as a stub and
+    // reappears joined once the reader loads the page that holds the parent.
     const layout = layoutGitGraph([commit("child", ["not-loaded"]), commit("other", [])]);
 
-    expect(layout.rows[0]?.parentLanes).toEqual([0]);
-    expect(layout.rows[0]?.lane).toBe(0);
+    expect(layout.rows[0]?.parentLanes).toEqual([]);
+    expect(layout.rows[0]?.releasedLanes).toEqual([0]);
+    expect(layout.laneCount).toBe(1);
   });
 
   it("reuses a released lane instead of growing the gutter forever", () => {

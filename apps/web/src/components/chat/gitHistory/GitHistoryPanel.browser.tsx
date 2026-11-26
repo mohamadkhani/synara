@@ -231,9 +231,25 @@ describe("GitHistoryPanel", () => {
   it("keeps drawing lanes when the history is deeper than the pane's cap", async () => {
     // Thirty lanes on one row exceed the twenty-four-column cap of this viewport. The row
     // clips to the cap and keeps drawing lanes; it does not turn the list into one rail.
-    const parents = Array.from({ length: 30 }, (_value, index) => `q${index}`.padEnd(40, "0"));
+    // The parents are loaded, so each really needs a lane.
+    const parentNames = Array.from({ length: 30 }, (_value, index) => `q${index}`);
     harness.listCommitHistory.mockResolvedValue({
-      commits: [{ ...commit, sha: "1".repeat(40), subject: "deep row", parents, refs: [] }],
+      commits: [
+        {
+          ...commit,
+          sha: "1".repeat(40),
+          subject: "deep row",
+          parents: parentNames.map((name) => name.padEnd(40, "0")),
+          refs: [],
+        },
+        ...parentNames.map((name) => ({
+          ...commit,
+          sha: name.padEnd(40, "0"),
+          subject: name,
+          parents: [],
+          refs: [],
+        })),
+      ],
       hasMore: false,
     });
     const screen = await mount();
