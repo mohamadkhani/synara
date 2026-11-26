@@ -120,6 +120,50 @@ describe("layoutGitGraph", () => {
   });
 });
 
+describe("dense column packing", () => {
+  it("draws the lanes a row keeps side by side instead of leaving empty columns", () => {
+    // Ten branches are open at once, eight of them end, and the surviving two are the
+    // first and the last lane: that row must draw them in columns 0 and 1 even though
+    // the widest row at the top still reserves ten columns.
+    const commits = [
+      commit("a1", ["x"]),
+      ...Array.from({ length: 8 }, (_value, index) => commit(`b${index}`, [`y${index}`])),
+      commit("z", ["w"]),
+      ...Array.from({ length: 8 }, (_value, index) => commit(`y${index}`)),
+      commit("x"),
+      commit("w"),
+    ];
+    const layout = layoutGitGraph(commits);
+    const xRow = layout.rows.find((row) => row.sha === "x");
+
+    expect(xRow?.topLanes).toEqual([0, 9]);
+    expect(xRow?.topLanes.indexOf(9)).toBe(1);
+    expect(xRow?.bottomLanes).toEqual([9]);
+    // The gutter follows the widest drawn row, which is still the ten tips.
+    expect(layout.laneCount).toBe(10);
+  });
+
+  it("reports the slide of a surviving lane into a freed column", () => {
+    const layout = layoutGitGraph([
+      commit("a", ["x"]),
+      commit("b", ["y"]),
+      commit("c", ["v"]),
+      commit("y"),
+      commit("x"),
+      commit("v"),
+    ]);
+    const releasedRow = layout.rows.find((row) => row.sha === "y");
+
+    // Lane 1 (y) is released while lane 2 (v) survives: v moves from column 2 at the
+    // row top to column 1 at the row bottom, which the renderer draws as a diagonal.
+    expect(releasedRow?.throughLanes).toContain(2);
+    expect(releasedRow?.topLanes).toEqual([0, 1, 2]);
+    expect(releasedRow?.bottomLanes).toEqual([0, 2]);
+    expect(releasedRow?.bottomLanes.indexOf(2)).toBe(1);
+    expect(layout.laneCount).toBe(3);
+  });
+});
+
 describe("lane gutter sizing", () => {
   it("grows the lane cap with the pane width, within bounds", () => {
     expect(resolveGitGraphLaneCap(0)).toBe(GIT_GRAPH_MIN_LANE_CAP);

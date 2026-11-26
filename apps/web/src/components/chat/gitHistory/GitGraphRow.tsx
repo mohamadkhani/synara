@@ -44,6 +44,16 @@ function laneCenter(lane: number, laneWidth: number): number {
   return lane * laneWidth + laneWidth / 2;
 }
 
+/**
+ * Drawn column of a logical lane in this row's compacted order. Rows draw the lanes
+ * they keep alive side by side, so a row that keeps lanes 0 and 9 places them in
+ * columns 0 and 1 instead of leaving eight empty columns between them.
+ */
+function drawnColumnIndex(order: ReadonlyArray<number>, lane: number): number {
+  const index = order.indexOf(lane);
+  return index >= 0 ? index : 0;
+}
+
 function buildCurve(
   fromLane: number,
   toLane: number,
@@ -125,7 +135,8 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   const gutter = resolveGitGraphGutter(props.laneCount, props.laneCap);
   const width = gutter.lanes * laneWidth;
   const mid = height / 2;
-  const commitX = laneCenter(gutter.collapsed ? 0 : row.lane, laneWidth);
+  const commitColumn = gutter.collapsed ? 0 : drawnColumnIndex(row.topLanes, row.lane);
+  const commitX = laneCenter(commitColumn, laneWidth);
   const color = gitGraphLaneColor(row.lane);
   const isCheckedOut = commit.refs.some((ref) => ref.kind === "head");
 
@@ -172,9 +183,10 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
         {gutter.collapsed
           ? null
           : row.throughLanes.map((lane) => (
+              // A lane that slides into a freed column draws the slide as a diagonal.
               <path
                 key={`through-${lane}`}
-                d={`M ${laneCenter(lane, laneWidth)} 0 L ${laneCenter(lane, laneWidth)} ${height}`}
+                d={`M ${laneCenter(drawnColumnIndex(row.topLanes, lane), laneWidth)} 0 L ${laneCenter(drawnColumnIndex(row.bottomLanes, lane), laneWidth)} ${height}`}
                 stroke={gitGraphLaneColor(lane)}
                 strokeWidth={2}
                 fill="none"
@@ -185,7 +197,13 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
           : row.incomingLanes.map((lane) => (
               <path
                 key={`incoming-${lane}`}
-                d={buildCurve(lane, row.lane, 0, mid, laneWidth)}
+                d={buildCurve(
+                  drawnColumnIndex(row.topLanes, lane),
+                  commitColumn,
+                  0,
+                  mid,
+                  laneWidth,
+                )}
                 stroke={gitGraphLaneColor(lane)}
                 strokeWidth={2}
                 fill="none"
@@ -196,7 +214,13 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
           : row.parentLanes.map((lane) => (
               <path
                 key={`parent-${lane}`}
-                d={buildCurve(row.lane, lane, mid, height, laneWidth)}
+                d={buildCurve(
+                  commitColumn,
+                  drawnColumnIndex(row.bottomLanes, lane),
+                  mid,
+                  height,
+                  laneWidth,
+                )}
                 // The edge into a merged branch carries that branch's lane color, so a
                 // merge does not paint the incoming side with the target branch's hue.
                 stroke={gitGraphLaneColor(lane)}
@@ -207,9 +231,11 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
         {gutter.collapsed
           ? null
           : row.releasedLanes.map((lane) => (
+              // The released lane has no column at the bottom edge; its stub stays
+              // where the dot is while the lanes to its right slide into the gap.
               <path
                 key={`released-${lane}`}
-                d={`M ${laneCenter(lane, laneWidth)} ${mid} L ${laneCenter(lane, laneWidth)} ${height}`}
+                d={`M ${commitX} ${mid} L ${commitX} ${height}`}
                 stroke={gitGraphLaneColor(lane)}
                 strokeWidth={2}
                 fill="none"

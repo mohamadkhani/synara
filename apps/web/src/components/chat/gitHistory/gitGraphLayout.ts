@@ -76,12 +76,33 @@ export interface GitGraphRow {
    * lane continues one line instead of leaving a half-row gap at the boundary.
    */
   readonly releasedLanes: ReadonlyArray<number>;
+  /**
+   * Logical lanes in the columns this row actually draws at its top edge, left to
+   * right. A row that keeps lanes 0 and 9 alive draws them in columns 0 and 1, so the
+   * graph does not leave empty columns between branches that are far apart in the
+   * lane numbering. Empty when nothing is drawn above the commit.
+   */
+  readonly topLanes: ReadonlyArray<number>;
+  /** The same column order at the row's bottom edge, after parents and releases. */
+  readonly bottomLanes: ReadonlyArray<number>;
 }
 
 export interface GitGraphLayout {
   readonly rows: ReadonlyArray<GitGraphRow>;
-  /** Widest lane count across rows, so every row reserves the same gutter. */
+  /**
+   * Widest number of drawn columns across rows, so every row reserves the same gutter.
+   * This is the compacted width, not the highest lane index.
+   */
   readonly laneCount: number;
+}
+
+/** Logical lanes that are alive in `lanes`, left to right: the drawn column order. */
+function drawnLaneOrder(lanes: ReadonlyArray<string | null>): number[] {
+  const order: number[] = [];
+  for (let index = 0; index < lanes.length; index += 1) {
+    if (lanes[index] !== null) order.push(index);
+  }
+  return order;
 }
 
 function firstFreeLane(lanes: Array<string | null>): number {
@@ -162,7 +183,9 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
     const releasedLanes = firstParent === null ? [lane] : [];
     if (firstParent === null) releasedLaneIndices.add(lane);
 
-    laneCount = Math.max(laneCount, before.length, after.length, lane + 1);
+    const topLanes = drawnLaneOrder(before);
+    const bottomLanes = drawnLaneOrder(after);
+    laneCount = Math.max(laneCount, topLanes.length, bottomLanes.length);
 
     rows.push({
       sha: commit.sha,
@@ -172,6 +195,8 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
       parentLanes,
       continuesFromAbove,
       releasedLanes,
+      topLanes,
+      bottomLanes,
     });
 
     // Releasing trailing lanes keeps the gutter narrow without shifting any index
