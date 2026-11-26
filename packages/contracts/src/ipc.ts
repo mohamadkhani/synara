@@ -193,6 +193,11 @@ import type {
   GitDeleteBranchRefInput,
   GitDeleteRefResult,
   GitDeleteTagRefInput,
+  GitBranchActionResult,
+  GitMergeBranchInput,
+  GitPullBranchInput,
+  GitPushBranchInput,
+  GitRebaseBranchInput,
   GitReadCommitDiffInput,
   GitReadCommitDiffResult,
   GitRevertCommitInput,
@@ -215,9 +220,15 @@ import type {
   GitStageFilesInput,
   GitStageFilesResult,
   GitStashAndCheckoutInput,
+  GitStashApplyInput,
+  GitStashApplyResult,
+  GitStashCreateInput,
+  GitStashCreateResult,
   GitStashDropInput,
   GitStashInfoInput,
   GitStashInfoResult,
+  GitStashListInput,
+  GitStashListResult,
   GitStatusInput,
   GitStatusResult,
   GitSummarizeDiffInput,
@@ -1373,6 +1384,10 @@ export interface NativeApi {
     createTag: (input: GitCreateTagInput) => Promise<GitCreateTagResult>;
     deleteBranchRef: (input: GitDeleteBranchRefInput) => Promise<GitDeleteRefResult>;
     deleteTagRef: (input: GitDeleteTagRefInput) => Promise<GitDeleteRefResult>;
+    pushBranch: (input: GitPushBranchInput) => Promise<GitBranchActionResult>;
+    pullBranch: (input: GitPullBranchInput) => Promise<GitPullResult>;
+    mergeBranch: (input: GitMergeBranchInput) => Promise<GitBranchActionResult>;
+    rebaseBranch: (input: GitRebaseBranchInput) => Promise<GitBranchActionResult>;
     createWorktree: (input: GitCreateWorktreeInput) => Promise<GitCreateWorktreeResult>;
     createDetachedWorktree: (
       input: GitCreateDetachedWorktreeInput,
@@ -1383,6 +1398,9 @@ export interface NativeApi {
     stashAndCheckout: (input: GitStashAndCheckoutInput) => Promise<void>;
     stashDrop: (input: GitStashDropInput) => Promise<void>;
     stashInfo: (input: GitStashInfoInput) => Promise<GitStashInfoResult>;
+    stashCreate: (input: GitStashCreateInput) => Promise<GitStashCreateResult>;
+    stashList: (input: GitStashListInput) => Promise<GitStashListResult>;
+    stashApply: (input: GitStashApplyInput) => Promise<GitStashApplyResult>;
     removeIndexLock: (input: GitRemoveIndexLockInput) => Promise<void>;
     init: (input: GitInitInput) => Promise<void>;
     stageFiles: (input: GitStageFilesInput) => Promise<GitStageFilesResult>;

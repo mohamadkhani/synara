@@ -8,12 +8,19 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 
-import type { GitCommitRef, GitHistoryCommit } from "@synara/contracts";
+import type {
+  ContextMenuItem,
+  GitCommitRef,
+  GitHistoryCommit,
+  GitStashEntry,
+} from "@synara/contracts";
 import { useAppSettings } from "~/appSettings";
 import {
   gitBranchesQueryOptions,
   gitCommitHistoryQueryOptions,
   gitFetchMutationOptions,
+  gitStashApplyMutationOptions,
+  gitStashListQueryOptions,
   gitWorkingTreeDiffStatsQueryOptions,
   refreshGitQueriesForCwd,
 } from "~/lib/gitReactQuery";
@@ -23,6 +30,7 @@ import { serverWorktreesQueryOptions } from "~/lib/serverReactQuery";
 import { useStore } from "~/store";
 import { createWorktreePathOwnershipSelector } from "~/storeSelectors";
 import { readNativeApi } from "~/nativeApi";
+import { contextMenuGroup, type ContextMenuGroupChild } from "~/lib/contextMenuGroup";
 import { GitCommitIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
@@ -36,9 +44,13 @@ import { Button } from "../../ui/button";
 import { toastManager } from "../../ui/toast";
 import { PanelStateMessage } from "../PanelStateMessage";
 import { GitCommitDetail } from "./GitCommitDetail";
+import { GitStashDetail } from "./GitStashDetail";
+import { GitBranchActionDialog, type GitBranchAction } from "./GitBranchActionDialog";
 import { GitDeleteRefDialog, type GitDeleteRefKind } from "./GitDeleteRefDialog";
+import { GitDeleteStashDialog } from "./GitDeleteStashDialog";
+import { GitStashDialog, type GitStashScope } from "./GitStashDialog";
 import { useGitCommitActions } from "./useGitCommitActions";
-import { GitCommitFlatRow, GitGraphCommitRow, GitWorkingTreeRow } from "./GitGraphRow";
+import { GitCommitFlatRow, GitGraphCommitRow, GitStashRow, GitWorkingTreeRow } from "./GitGraphRow";
 import { GitWorkingTreeDetail } from "./GitWorkingTreeDetail";
 import {
   ALL_BRANCHES_VALUE,
@@ -53,10 +65,12 @@ type BranchFilterValue = string;
 
 type GitHistorySelection =
   | { kind: "commit"; sha: string }
-  | { kind: "workingTree"; scope: "staged" | "unstaged" };
+  | { kind: "workingTree"; scope: "staged" | "unstaged" }
+  | { kind: "stash"; sha: string };
 
 type GitHistoryEntry =
   | { kind: "workingTree"; scope: "staged" | "unstaged" }
+  | { kind: "stash"; stash: GitStashEntry }
   | { kind: "commit"; commit: GitHistoryCommit };
 
 export function GitHistoryPanel(props: {
@@ -82,7 +96,11 @@ export function GitHistoryPanel(props: {
   // when the reader collapses them again.
   const [detailExpanded, setDetailExpanded] = useState(false);
   const selectedSha = selection?.kind === "commit" ? selection.sha : null;
+  const selectedStash = selection?.kind === "stash" ? selection.sha : null;
   const [deleteRef, setDeleteRef] = useState<{ kind: GitDeleteRefKind; name: string } | null>(null);
+  const [branchAction, setBranchAction] = useState<GitBranchAction | null>(null);
+  const [stashScope, setStashScope] = useState<GitStashScope | null>(null);
+  const [deleteStash, setDeleteStash] = useState<GitStashEntry | null>(null);
   const queryClient = useQueryClient();
   const commitActions = useGitCommitActions({ cwd: viewCwd });
   const deferredSearch = useDeferredValue(search);
@@ -105,6 +123,69 @@ export function GitHistoryPanel(props: {
       });
     }
   }, [fetchMutation, queryClient, viewCwd, t]);
+
+  const stashApplyMutation = useMutation(
+    gitStashApplyMutationOptions({ cwd: viewCwd, queryClient }),
+  );
+
+  const applyStash = useCallback(
+    async (stash: GitStashEntry, mode: "apply" | "pop") => {
+      try {
+        const result = await stashApplyMutation.mutateAsync({
+          stashRef: stash.stashRef,
+          mode,
+        });
+        if (result.status === "conflicted") {
+          // The changes are in the working tree with conflict markers and the entry is
+          // kept, so this is a warning that needs a human rather than a failure to retry.
+          toastManager.add({
+            type: "warning",
+            title: t("git:historyStashConflicted", { value0: stash.stashRef }),
+            ...(result.detail ? { description: result.detail } : {}),
+          });
+          return;
+        }
+        toastManager.add({
+          type: "success",
+          title: t(mode === "pop" ? "git:historyStashPopped" : "git:historyStashApplied", {
+            value0: stash.stashRef,
+          }),
+        });
+      } catch (cause) {
+        toastManager.add({
+          type: "error",
+          title: t("git:historyStashApplyFailed"),
+          description: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
+    },
+    [stashApplyMutation, t],
+  );
+
+  const showStashContextMenu = useCallback(
+    async (stash: GitStashEntry, event: ReactMouseEvent) => {
+      event.preventDefault();
+      const api = readNativeApi();
+      if (!api) return;
+      const action = await api.contextMenu.show(
+        [
+          { id: "stash-apply" as const, label: t("git:historyStashApply") },
+          { id: "stash-pop" as const, label: t("git:historyStashPop") },
+          {
+            id: "stash-delete" as const,
+            label: t("git:historyStashDelete"),
+            separatorBefore: true,
+            destructive: true,
+          },
+        ],
+        { x: event.clientX, y: event.clientY },
+      );
+      if (action === "stash-apply") void applyStash(stash, "apply");
+      else if (action === "stash-pop") void applyStash(stash, "pop");
+      else if (action === "stash-delete") setDeleteStash(stash);
+    },
+    [applyStash, t],
+  );
 
   useEffect(() => {
     setViewCwd(props.activeCwd);
@@ -215,6 +296,8 @@ export function GitHistoryPanel(props: {
   );
   const unstagedStats = unstagedStatsQuery.data ?? null;
   const stagedStats = stagedStatsQuery.data ?? null;
+  const stashesQuery = useQuery(gitStashListQueryOptions({ cwd: viewCwd }));
+  const stashes = stashesQuery.data?.stashes ?? [];
 
   // Pages are offset-based, so a commit landing between two page reads shifts the
   // later pages and repeats entries; flatten by sha to keep one row per commit.
@@ -268,11 +351,17 @@ export function GitHistoryPanel(props: {
             ? [{ kind: "workingTree" as const, scope: "staged" as const }]
             : []),
         ];
+    // A text filter hides the stash rows for the same reason as the working-tree rows:
+    // their message is not part of the commit search.
+    const stashEntries: GitHistoryEntry[] = isSearching
+      ? []
+      : stashes.map((stash) => ({ kind: "stash" as const, stash }));
     return [
       ...workingTreeEntries,
+      ...stashEntries,
       ...visibleCommits.map((commit) => ({ kind: "commit" as const, commit })),
     ];
-  }, [isSearching, stagedStats, unstagedStats, visibleCommits]);
+  }, [isSearching, stagedStats, stashes, unstagedStats, visibleCommits]);
 
   const virtualizer = useVirtualizer({
     count: entries.length,
@@ -285,6 +374,33 @@ export function GitHistoryPanel(props: {
   const selectedCommit = selectedSha
     ? (commits.find((commit) => commit.sha === selectedSha) ?? null)
     : null;
+  const selectedStashEntry = selectedStash
+    ? (stashes.find((stash) => stash.sha === selectedStash) ?? null)
+    : null;
+
+  // The staged and unstaged pseudo-commit rows stash their own scope. The dialog asks
+  // for the stash title; only a staged stash offers "include unstaged".
+  const showWorkingTreeContextMenu = useCallback(
+    async (scope: GitStashScope, event: ReactMouseEvent) => {
+      event.preventDefault();
+      const api = readNativeApi();
+      if (!api) return;
+      const action = await api.contextMenu.show(
+        [
+          {
+            id: "stash-changes" as const,
+            label:
+              scope === "staged"
+                ? t("git:historyStashStagedChanges")
+                : t("git:historyStashUnstagedChanges"),
+          },
+        ],
+        { x: event.clientX, y: event.clientY },
+      );
+      if (action === "stash-changes") setStashScope(scope);
+    },
+    [t],
+  );
 
   // Branch and tag chips open the same kind of actions the branch picker offers;
   // without this there is no way to check out a branch from the graph.
@@ -294,27 +410,146 @@ export function GitHistoryPanel(props: {
       const api = readNativeApi();
       if (!api || !viewCwd || ref.kind === "head") return;
 
-      const items =
+      const branchList = branchesQuery.data;
+      const remoteNames = branchList?.remoteNames ?? [];
+      const hasOriginRemote = branchList?.hasOriginRemote ?? false;
+      // Push target: the branch's configured upstream remote, else origin, else the
+      // only remote. Null hides push until a remote exists to push to.
+      const resolveLocalRemote = (
+        branchName: string,
+      ): { remote: string; hasUpstream: boolean } | null => {
+        const branch = branchList?.branches.find(
+          (candidate) => candidate.isRemote !== true && candidate.name === branchName,
+        );
+        if (branch?.upstreamRemote) {
+          return { remote: branch.upstreamRemote, hasUpstream: true };
+        }
+        if (hasOriginRemote) return { remote: "origin", hasUpstream: false };
+        if (remoteNames.length === 1) return { remote: remoteNames[0]!, hasUpstream: false };
+        return null;
+      };
+      const remoteBranchEntry = branchList?.branches.find(
+        (candidate) => candidate.isRemote === true && candidate.name === ref.name,
+      );
+      // Split `remote/branch` with a known remote name, since branch names may contain
+      // slashes of their own. Empty means the chip is not a remote branch at all.
+      const remotePrefix =
+        remoteBranchEntry?.remoteName ??
+        remoteNames.find((name) => ref.name.startsWith(`${name}/`)) ??
+        (ref.name.includes("/") ? ref.name.slice(0, ref.name.indexOf("/")) : "");
+      const remoteBranchName = remotePrefix ? ref.name.slice(remotePrefix.length + 1) : ref.name;
+
+      // The branch menu resolves each action to the exact command it will confirm, so
+      // the dialog never shows a command the server would not run.
+      const branchActionByMenuId = new Map<string, GitBranchAction>();
+      const branchActions: ContextMenuGroupChild<string>[] = [];
+      if (ref.kind === "branch") {
+        const local = resolveLocalRemote(ref.name);
+        if (local) {
+          branchActionByMenuId.set("branch-push", {
+            kind: "push",
+            cwd: viewCwd,
+            branch: ref.name,
+            remote: local.remote,
+            hasUpstream: local.hasUpstream,
+          });
+          branchActions.push({ id: "branch-push", label: t("git:historyPushBranch") });
+        }
+        if (ref.checkedOut) {
+          if (local?.hasUpstream) {
+            branchActionByMenuId.set("branch-pull", {
+              kind: "pull",
+              cwd: viewCwd,
+              remote: local.remote,
+              branch: ref.name,
+              currentBranch: ref.name,
+            });
+            branchActions.push({ id: "branch-pull", label: t("git:historyPullBranch") });
+          }
+        } else if (currentBranch && ref.name !== currentBranch) {
+          branchActionByMenuId.set("branch-merge", {
+            kind: "merge",
+            cwd: viewCwd,
+            ref: ref.name,
+            currentBranch,
+          });
+          branchActions.push({
+            id: "branch-merge",
+            label: t("git:historyMergeBranch", { value0: currentBranch }),
+          });
+          branchActionByMenuId.set("branch-rebase", {
+            kind: "rebase",
+            cwd: viewCwd,
+            ref: ref.name,
+            currentBranch,
+          });
+          branchActions.push({
+            id: "branch-rebase",
+            label: t("git:historyRebaseBranch", { value0: currentBranch, value1: ref.name }),
+          });
+        }
+      } else if (ref.kind === "remote" && currentBranch && remotePrefix) {
+        if (remoteBranchName === currentBranch) {
+          branchActionByMenuId.set("branch-pull", {
+            kind: "pull",
+            cwd: viewCwd,
+            remote: remotePrefix,
+            branch: remoteBranchName,
+            currentBranch,
+          });
+          branchActions.push({ id: "branch-pull", label: t("git:historyPullBranch") });
+        } else {
+          branchActionByMenuId.set("branch-merge", {
+            kind: "merge",
+            cwd: viewCwd,
+            ref: ref.name,
+            currentBranch,
+          });
+          branchActions.push({
+            id: "branch-merge",
+            label: t("git:historyMergeBranch", { value0: currentBranch }),
+          });
+          branchActionByMenuId.set("branch-rebase", {
+            kind: "rebase",
+            cwd: viewCwd,
+            ref: ref.name,
+            currentBranch,
+          });
+          branchActions.push({
+            id: "branch-rebase",
+            label: t("git:historyRebaseBranch", { value0: currentBranch, value1: ref.name }),
+          });
+        }
+      }
+
+      const items: ContextMenuItem<string>[] =
         ref.kind === "tag"
           ? [
-              { id: "checkout-tag" as const, label: t("git:historyCheckoutTag") },
-              { id: "create-branch" as const, label: t("git:historyCreateBranchHere") },
-              { id: "copy-name" as const, label: t("git:historyCopyRefName") },
+              { id: "checkout-tag", label: t("git:historyCheckoutTag") },
+              { id: "create-branch", label: t("git:historyCreateBranchHere") },
+              { id: "copy-name", label: t("git:historyCopyRefName") },
               {
-                id: "delete-tag" as const,
+                id: "delete-tag",
                 label: t("git:historyDeleteTag"),
                 separatorBefore: true,
                 destructive: true,
               },
             ]
           : [
-              { id: "checkout-branch" as const, label: t("git:historyCheckoutBranch") },
-              { id: "create-branch" as const, label: t("git:historyCreateBranchHere") },
-              { id: "copy-name" as const, label: t("git:historyCopyRefName") },
+              // A branch that is already checked out has no checkout row to offer.
+              ...(ref.kind === "branch" && ref.checkedOut
+                ? []
+                : [{ id: "checkout-branch", label: t("git:historyCheckoutBranch") }]),
+              ...contextMenuGroup(
+                { id: "branch-actions", label: t("git:historyBranchActions") },
+                branchActions,
+              ),
+              { id: "create-branch", label: t("git:historyCreateBranchHere") },
+              { id: "copy-name", label: t("git:historyCopyRefName") },
               ...(ref.kind === "branch"
                 ? [
                     {
-                      id: "delete-branch" as const,
+                      id: "delete-branch",
                       label: t("git:historyDeleteBranch"),
                       separatorBefore: true,
                       destructive: true,
@@ -325,6 +560,12 @@ export function GitHistoryPanel(props: {
 
       const action = await api.contextMenu.show(items, { x: event.clientX, y: event.clientY });
       if (!action) return;
+
+      const resolvedAction = branchActionByMenuId.get(action);
+      if (resolvedAction) {
+        setBranchAction(resolvedAction);
+        return;
+      }
 
       if (action === "copy-name") {
         await copyTextToClipboard(ref.name);
@@ -383,7 +624,7 @@ export function GitHistoryPanel(props: {
         });
       }
     },
-    [commitActions, viewCwd, queryClient, t],
+    [commitActions, viewCwd, queryClient, t, currentBranch, branchesQuery.data],
   );
 
   // Right-click on a commit row offers the same actions as its detail menu.
@@ -416,14 +657,20 @@ export function GitHistoryPanel(props: {
     // Leaving focus mode when the selection changes keeps the next commit's detail
     // from inheriting the previous commit's expanded layout.
     setDetailExpanded(false);
-    setSelection((current) =>
-      current !== null &&
-      current.kind === next.kind &&
-      (current.kind === "commit" ? current.sha : current.scope) ===
-        (next.kind === "commit" ? next.sha : next.scope)
-        ? null
-        : next,
-    );
+    setSelection((current) => {
+      if (current === null || current.kind !== next.kind) return next;
+      if (current.kind === "commit" && next.kind === "commit" && current.sha === next.sha)
+        return null;
+      if (current.kind === "stash" && next.kind === "stash" && current.sha === next.sha)
+        return null;
+      if (
+        current.kind === "workingTree" &&
+        next.kind === "workingTree" &&
+        current.scope === next.scope
+      )
+        return null;
+      return next;
+    });
   }, []);
 
   const branchFilterLabel =
@@ -496,32 +743,48 @@ export function GitHistoryPanel(props: {
             {virtualizer.getVirtualItems().map((item) => {
               const entry = entries[item.index];
               if (!entry) return null;
-              const key = entry.kind === "commit" ? entry.commit.sha : entry.scope;
+              const key =
+                entry.kind === "commit"
+                  ? entry.commit.sha
+                  : entry.kind === "stash"
+                    ? `stash:${entry.stash.sha}`
+                    : entry.scope;
               return (
                 <div
                   key={key}
                   className="absolute left-0 top-0 w-full"
                   style={{ transform: `translateY(${item.start}px)` }}
                 >
-                  {entry.kind === "commit"
-                    ? renderCommitRow({
-                        commit: entry.commit,
-                        isSearching,
-                        row: rowBySha.get(entry.commit.sha),
-                        laneCount: layout.laneCount,
-                        selection,
-                        onSelect: selectEntry,
-                        timestampFormat: settings.timestampFormat,
-                        onRefContextMenu: showRefContextMenu,
-                        onCommitContextMenu: showCommitContextMenu,
-                      })
-                    : renderWorkingTreeRow({
-                        scope: entry.scope,
-                        stats: entry.scope === "staged" ? stagedStats : unstagedStats,
-                        laneCount: layout.laneCount,
-                        selection,
-                        onSelect: selectEntry,
-                      })}
+                  {entry.kind === "stash" ? (
+                    <GitStashRow
+                      stash={entry.stash}
+                      laneCount={layout.laneCount}
+                      selected={selectedStash === entry.stash.sha}
+                      onSelect={(stash) => selectEntry({ kind: "stash", sha: stash.sha })}
+                      onContextMenu={(event) => void showStashContextMenu(entry.stash, event)}
+                    />
+                  ) : entry.kind === "commit" ? (
+                    renderCommitRow({
+                      commit: entry.commit,
+                      isSearching,
+                      row: rowBySha.get(entry.commit.sha),
+                      laneCount: layout.laneCount,
+                      selection,
+                      onSelect: selectEntry,
+                      timestampFormat: settings.timestampFormat,
+                      onRefContextMenu: showRefContextMenu,
+                      onCommitContextMenu: showCommitContextMenu,
+                    })
+                  ) : (
+                    renderWorkingTreeRow({
+                      scope: entry.scope,
+                      stats: entry.scope === "staged" ? stagedStats : unstagedStats,
+                      laneCount: layout.laneCount,
+                      selection,
+                      onSelect: selectEntry,
+                      onContextMenu: showWorkingTreeContextMenu,
+                    })
+                  )}
                 </div>
               );
             })}
@@ -560,6 +823,15 @@ export function GitHistoryPanel(props: {
           onToggleExpanded={() => setDetailExpanded((current) => !current)}
           onRefContextMenu={showRefContextMenu}
         />
+      ) : selection?.kind === "stash" && selectedStashEntry ? (
+        <GitStashDetail
+          key={selection.sha}
+          cwd={viewCwd}
+          stash={selectedStashEntry}
+          theme={props.theme}
+          expanded={detailExpanded}
+          onToggleExpanded={() => setDetailExpanded((current) => !current)}
+        />
       ) : selection?.kind === "workingTree" ? (
         <GitWorkingTreeDetail
           key={selection.scope}
@@ -588,6 +860,39 @@ export function GitHistoryPanel(props: {
         />
       ) : null}
 
+      {stashScope ? (
+        <GitStashDialog
+          open
+          cwd={viewCwd}
+          scope={stashScope}
+          onOpenChange={(open) => {
+            if (!open) setStashScope(null);
+          }}
+        />
+      ) : null}
+
+      {deleteStash ? (
+        <GitDeleteStashDialog
+          open
+          cwd={viewCwd}
+          stashRef={deleteStash.stashRef}
+          message={deleteStash.message}
+          onOpenChange={(open) => {
+            if (!open) setDeleteStash(null);
+          }}
+        />
+      ) : null}
+
+      {branchAction ? (
+        <GitBranchActionDialog
+          open
+          action={branchAction}
+          onOpenChange={(open) => {
+            if (!open) setBranchAction(null);
+          }}
+        />
+      ) : null}
+
       {commitActions.dialog}
     </div>
   );
@@ -599,6 +904,7 @@ function renderWorkingTreeRow(input: {
   laneCount: number;
   selection: GitHistorySelection | null;
   onSelect: (next: GitHistorySelection) => void;
+  onContextMenu: (scope: GitStashScope, event: ReactMouseEvent) => void;
 }) {
   return (
     <GitWorkingTreeRow
@@ -611,6 +917,7 @@ function renderWorkingTreeRow(input: {
       laneCount={input.laneCount}
       selected={input.selection?.kind === "workingTree" && input.selection.scope === input.scope}
       onSelect={() => input.onSelect({ kind: "workingTree", scope: input.scope })}
+      onContextMenu={(event) => input.onContextMenu(input.scope, event)}
     />
   );
 }

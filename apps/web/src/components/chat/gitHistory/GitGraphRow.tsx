@@ -3,11 +3,11 @@
 //          layout plus the shared subject/author/sha summary.
 // Layer: Git history UI
 
-import type { GitHistoryCommit } from "@synara/contracts";
+import type { GitHistoryCommit, GitStashEntry } from "@synara/contracts";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { memo } from "react";
 
-import { ChangesIcon } from "~/lib/icons";
+import { ArchiveIcon, ChangesIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { DiffStat } from "../DiffStatLabel";
 import { GitCommitRefBadges } from "./GitCommitRefBadges";
@@ -262,6 +262,47 @@ export const GitCommitFlatRow = memo(function GitCommitFlatRow(props: {
 });
 
 /**
+ * One stash entry above the history: same shape as a working-tree row, with the
+ * message as the label and the `stash@{n}` handle on the right. Actions live in the
+ * row's context menu, so the row itself is not clickable.
+ */
+export const GitStashRow = memo(function GitStashRow(props: {
+  stash: GitStashEntry;
+  laneCount: number;
+  selected?: boolean;
+  onSelect?: (stash: GitStashEntry) => void;
+  onContextMenu?: (event: ReactMouseEvent) => void;
+}) {
+  const gutterWidth = visibleGitGraphLaneCount(props.laneCount) * GIT_GRAPH_LANE_WIDTH;
+  return (
+    <button
+      type="button"
+      aria-pressed={props.selected}
+      onClick={() => props.onSelect?.(props.stash)}
+      onContextMenu={props.onContextMenu}
+      title={`${props.stash.stashRef}: ${props.stash.message}`}
+      style={{ height: GIT_GRAPH_ROW_HEIGHT }}
+      className={cn(
+        COMMIT_ROW_CLASS_NAME,
+        "cursor-pointer select-none",
+        props.selected ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
+      )}
+    >
+      <span
+        style={{ width: gutterWidth }}
+        className="flex shrink-0 items-center justify-center text-muted-foreground"
+      >
+        <ArchiveIcon className="size-3.5" aria-hidden="true" />
+      </span>
+      <span className="min-w-0 flex-1 truncate text-ui text-foreground">{props.stash.message}</span>
+      <span className="hidden shrink-0 items-center gap-2 text-ui-xs text-muted-foreground @min-[22rem]:flex">
+        <span className="font-mono">{props.stash.stashRef}</span>
+      </span>
+    </button>
+  );
+});
+
+/**
  * Pseudo-commit row for the working tree: same shape as a commit row so it sits at
  * the top of the list, but with a change icon instead of a graph dot and no author,
  * date, or sha.
@@ -274,12 +315,14 @@ export const GitWorkingTreeRow = memo(function GitWorkingTreeRow(props: {
   selected: boolean;
   onSelect: () => void;
   laneCount: number;
+  onContextMenu?: (event: ReactMouseEvent) => void;
 }) {
   const gutterWidth = visibleGitGraphLaneCount(props.laneCount) * GIT_GRAPH_LANE_WIDTH;
   return (
     <button
       type="button"
       onClick={props.onSelect}
+      onContextMenu={props.onContextMenu}
       aria-pressed={props.selected}
       title={props.label}
       style={{ height: GIT_GRAPH_ROW_HEIGHT }}

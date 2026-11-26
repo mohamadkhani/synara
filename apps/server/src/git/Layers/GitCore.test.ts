@@ -2030,6 +2030,582 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
+  // ── branch remote and history actions ──
+
+  describe("branch remote and history actions", () => {
+    /** A repo with `origin` added and the default branch pushed. */
+    const initRepoWithRemote = () =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const tmp = yield* makeTmpDir();
+        yield* git(remote, ["init", "--bare"]);
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["remote", "add", "origin", remote]);
+        yield* git(tmp, ["push", "-u", "origin", defaultBranch]);
+        return { remote, tmp, defaultBranch };
+      });
+
+    it.effect("pushes a branch to a remote and sets its upstream", () =>
+      Effect.gen(function* () {
+        const { tmp } = yield* initRepoWithRemote();
+        yield* git(tmp, ["checkout", "-b", "feature/push"]);
+        yield* commitWithDate(
+          tmp,
+          "push.txt",
+          "push\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "push commit",
+        );
+
+        const result = yield* (yield* GitCore).pushBranch({
+          cwd: tmp,
+          branch: "feature/push",
+          remote: "origin",
+          setUpstream: true,
+        });
+
+        expect(result.ok).toBe(true);
+        expect(yield* git(tmp, ["ls-remote", "--heads", "origin", "feature/push"])).not.toBe("");
+        expect(yield* git(tmp, ["config", "--get", "branch.feature/push.remote"])).toBe("origin");
+
+        const listed = yield* (yield* GitCore).listBranches({ cwd: tmp });
+        expect(listed.remoteNames).toEqual(["origin"]);
+        expect(
+          listed.branches.find((branch) => branch.name === "feature/push")?.upstreamRemote,
+        ).toBe("origin");
+      }),
+    );
+
+    it.effect("does not report a local branch upstream as a remote", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["branch", "base"]);
+        yield* git(tmp, ["branch", "--set-upstream-to", "base", defaultBranch]);
+
+        const listed = yield* (yield* GitCore).listBranches({ cwd: tmp });
+
+        expect(
+          listed.branches.find((branch) => branch.name === defaultBranch)?.upstreamRemote,
+        ).toBeUndefined();
+      }),
+    );
+
+    it.effect(
+      "force-with-lease rewrites a diverged branch only when the tracking ref matches",
+      () =>
+        Effect.gen(function* () {
+          const { tmp } = yield* initRepoWithRemote();
+          yield* git(tmp, ["checkout", "-b", "feature/rewrite"]);
+          yield* commitWithDate(
+            tmp,
+            "rewrite.txt",
+            "rewrite\n",
+            "Thu, 1 Jan 2037 00:00:00 +0000",
+            "rewrite one",
+          );
+          yield* git(tmp, ["push", "-u", "origin", "feature/rewrite"]);
+          // Rewriting the pushed commit makes the local branch diverge from the remote.
+          yield* git(tmp, ["commit", "--amend", "-m", "rewrite one (amended)"]);
+
+          const plain = yield* (yield* GitCore)
+            .pushBranch({ cwd: tmp, branch: "feature/rewrite", remote: "origin" })
+            .pipe(Effect.flip);
+          expect(plain).toBeInstanceOf(GitCommandError);
+
+          const forced = yield* (yield* GitCore).pushBranch({
+            cwd: tmp,
+            branch: "feature/rewrite",
+            remote: "origin",
+            forceWithLease: true,
+          });
+          expect(forced.ok).toBe(true);
+        }),
+    );
+
+    it.effect("pulls a remote advance and reports an up-to-date second pull", () =>
+      Effect.gen(function* () {
+        const { remote, tmp, defaultBranch } = yield* initRepoWithRemote();
+        const clone = yield* makeTmpDir();
+        yield* git(clone, ["clone", remote, "."]);
+        yield* git(clone, ["config", "user.email", "test@test.com"]);
+        yield* git(clone, ["config", "user.name", "Test"]);
+        yield* commitWithDate(
+          clone,
+          "remote-only.txt",
+          "remote\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "remote commit",
+        );
+        yield* git(clone, ["push", "origin", defaultBranch]);
+
+        const core = yield* GitCore;
+        const pulled = yield* core.pullBranch({
+          cwd: tmp,
+          remote: "origin",
+          branch: defaultBranch,
+        });
+        expect(pulled.status).toBe("pulled");
+        expect(existsSync(path.join(tmp, "remote-only.txt"))).toBe(true);
+
+        const again = yield* core.pullBranch({ cwd: tmp, remote: "origin", branch: defaultBranch });
+        expect(again.status).toBe("skipped_up_to_date");
+      }),
+    );
+
+    it.effect("pull --rebase keeps the history linear", () =>
+      Effect.gen(function* () {
+        const { remote, tmp, defaultBranch } = yield* initRepoWithRemote();
+        const clone = yield* makeTmpDir();
+        yield* git(clone, ["clone", remote, "."]);
+        yield* git(clone, ["config", "user.email", "test@test.com"]);
+        yield* git(clone, ["config", "user.name", "Test"]);
+        yield* commitWithDate(
+          clone,
+          "remote.txt",
+          "remote\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "remote commit",
+        );
+        yield* git(clone, ["push", "origin", defaultBranch]);
+        // A local commit means a plain pull would merge; rebase replays it on top.
+        yield* commitWithDate(
+          tmp,
+          "local.txt",
+          "local\n",
+          "Fri, 2 Jan 2037 00:00:00 +0000",
+          "local commit",
+        );
+
+        const result = yield* (yield* GitCore).pullBranch({
+          cwd: tmp,
+          remote: "origin",
+          branch: defaultBranch,
+          rebase: true,
+        });
+
+        expect(result.status).toBe("pulled");
+        expect(yield* git(tmp, ["log", "--merges", "--oneline"])).toBe("");
+        expect(yield* git(tmp, ["log", "-1", "--format=%s"])).toBe("local commit");
+      }),
+    );
+
+    it.effect("merge --no-ff creates a merge commit", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["checkout", "-b", "feature/merge"]);
+        yield* commitWithDate(
+          tmp,
+          "feature.txt",
+          "feature\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "feature commit",
+        );
+        yield* git(tmp, ["checkout", defaultBranch]);
+
+        const result = yield* (yield* GitCore).mergeBranch({
+          cwd: tmp,
+          ref: "feature/merge",
+          noFastForward: true,
+        });
+
+        expect(result.ok).toBe(true);
+        expect(yield* git(tmp, ["log", "--merges", "--oneline"])).not.toBe("");
+      }),
+    );
+
+    it.effect("merge --squash stages the changes without committing them", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        const headBefore = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["checkout", "-b", "feature/squash"]);
+        yield* commitWithDate(
+          tmp,
+          "squash.txt",
+          "squash\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "squash commit",
+        );
+        yield* git(tmp, ["checkout", defaultBranch]);
+
+        const result = yield* (yield* GitCore).mergeBranch({
+          cwd: tmp,
+          ref: "feature/squash",
+          squash: true,
+        });
+
+        expect(result.ok).toBe(true);
+        expect(yield* git(tmp, ["rev-parse", "HEAD"])).toBe(headBefore);
+        expect(yield* git(tmp, ["status", "--porcelain"])).not.toBe("");
+      }),
+    );
+
+    it.effect("clears the conflicts a failed squash merge left behind", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["checkout", "-b", "feature/squash-conflict"]);
+        yield* commitWithDate(
+          tmp,
+          "shared.txt",
+          "feature side\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "feature side",
+        );
+        yield* git(tmp, ["checkout", defaultBranch]);
+        yield* commitWithDate(
+          tmp,
+          "shared.txt",
+          "default side\n",
+          "Fri, 2 Jan 2037 00:00:00 +0000",
+          "default side",
+        );
+
+        const error = yield* (yield* GitCore)
+          .mergeBranch({ cwd: tmp, ref: "feature/squash-conflict", squash: true })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+        // `merge --abort` cannot run without MERGE_HEAD, so a squash conflict must be
+        // cleaned up another way; nothing conflicted may be left for the next action.
+        expect(yield* git(tmp, ["status", "--porcelain"])).toBe("");
+      }),
+    );
+
+    it.effect("blocks merge and rebase while the working tree is dirty", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["checkout", "-b", "feature/target"]);
+        yield* commitWithDate(
+          tmp,
+          "target.txt",
+          "target\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "target commit",
+        );
+        yield* git(tmp, ["checkout", defaultBranch]);
+        yield* writeTextFile(path.join(tmp, "dirty.txt"), "dirty\n");
+
+        const core = yield* GitCore;
+        const mergeError = yield* core
+          .mergeBranch({ cwd: tmp, ref: "feature/target" })
+          .pipe(Effect.flip);
+        expect(mergeError.message).toContain("Commit or stash");
+
+        const rebaseError = yield* core
+          .rebaseBranch({ cwd: tmp, ref: "feature/target" })
+          .pipe(Effect.flip);
+        expect(rebaseError.message).toContain("Commit or stash");
+      }),
+    );
+
+    it.effect("autosquash folds fixup commits during a rebase", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["branch", "base"]);
+        yield* commitWithDate(
+          tmp,
+          "thing.txt",
+          "thing\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "feat: thing",
+        );
+        yield* commitWithDate(
+          tmp,
+          "thing-fix.txt",
+          "thing fix\n",
+          "Fri, 2 Jan 2037 00:00:00 +0000",
+          "fixup! feat: thing",
+        );
+
+        const result = yield* (yield* GitCore).rebaseBranch({
+          cwd: tmp,
+          ref: "base",
+          autosquash: true,
+        });
+
+        expect(result.ok).toBe(true);
+        // Base commit plus the squashed feature commit; the fixup is gone.
+        expect(yield* git(tmp, ["rev-list", "--count", "HEAD"])).toBe("2");
+        expect(yield* git(tmp, ["log", "-1", "--format=%s"])).toBe("feat: thing");
+        expect(yield* git(tmp, ["branch", "--show-current"])).toBe(defaultBranch);
+      }),
+    );
+
+    it.effect("aborts a conflicting rebase and leaves the working tree clean", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        yield* git(tmp, ["checkout", "-b", "feature/conflict"]);
+        yield* commitWithDate(
+          tmp,
+          "conflict.txt",
+          "feature side\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "feature side",
+        );
+        yield* git(tmp, ["checkout", defaultBranch]);
+        yield* commitWithDate(
+          tmp,
+          "conflict.txt",
+          "default side\n",
+          "Fri, 2 Jan 2037 00:00:00 +0000",
+          "default side",
+        );
+
+        const error = yield* (yield* GitCore)
+          .rebaseBranch({ cwd: tmp, ref: "feature/conflict" })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+        expect(yield* git(tmp, ["status", "--porcelain"])).toBe("");
+        expect(yield* git(tmp, ["branch", "--show-current"])).toBe(defaultBranch);
+      }),
+    );
+  });
+
+  // ── stashCreate ──
+
+  describe("stash actions", () => {
+    it.effect("stashes only the unstaged changes and keeps the index intact", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        // One file carries a staged hunk and a second, unstaged hunk on top.
+        yield* writeTextFile(path.join(tmp, "mixed.txt"), "base\n");
+        yield* git(tmp, ["add", "mixed.txt"]);
+        yield* git(tmp, ["commit", "-m", "add mixed"]);
+        yield* writeTextFile(path.join(tmp, "mixed.txt"), "staged\n");
+        yield* git(tmp, ["add", "mixed.txt"]);
+        yield* writeTextFile(path.join(tmp, "mixed.txt"), "staged and unstaged\n");
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "untracked\n");
+
+        const result = yield* (yield* GitCore).stashCreate({
+          cwd: tmp,
+          message: "wip unstaged",
+          scope: "unstaged",
+        });
+
+        expect(result.message).toBe("wip unstaged");
+        expect(yield* git(tmp, ["stash", "list", "--format=%s"])).toContain("wip unstaged");
+        // Nothing unstaged or untracked is left; the staged hunk stays staged.
+        expect(yield* git(tmp, ["diff", "--name-only"])).toBe("");
+        expect(yield* git(tmp, ["ls-files", "--others", "--exclude-standard"])).toBe("");
+        expect(yield* git(tmp, ["diff", "--cached", "--name-only"])).toBe("mixed.txt");
+        expect(yield* readTextFile(path.join(tmp, "mixed.txt"))).toBe("staged\n");
+      }),
+    );
+
+    it.effect("stashes only staged changes and leaves unstaged and untracked files", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "staged.txt"), "staged\n");
+        yield* git(tmp, ["add", "staged.txt"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# test\nunstaged\n");
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "untracked\n");
+
+        yield* (yield* GitCore).stashCreate({
+          cwd: tmp,
+          message: "wip staged",
+          scope: "staged",
+        });
+
+        expect(yield* git(tmp, ["stash", "list", "--format=%s"])).toContain("wip staged");
+        expect(yield* git(tmp, ["diff", "--cached", "--name-only"])).toBe("");
+        expect(yield* git(tmp, ["diff", "--name-only"])).toBe("README.md");
+        expect(yield* git(tmp, ["ls-files", "--others", "--exclude-standard"])).toBe(
+          "untracked.txt",
+        );
+      }),
+    );
+
+    it.effect("includes unstaged and untracked changes when the staged stash asks for them", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "staged.txt"), "staged\n");
+        yield* git(tmp, ["add", "staged.txt"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# test\nunstaged\n");
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "untracked\n");
+
+        yield* (yield* GitCore).stashCreate({
+          cwd: tmp,
+          message: "wip everything",
+          scope: "staged",
+          includeUnstaged: true,
+        });
+
+        expect(yield* git(tmp, ["stash", "list", "--format=%s"])).toContain("wip everything");
+        expect(yield* git(tmp, ["status", "--porcelain"])).toBe("");
+      }),
+    );
+
+    it.effect("refuses a staged stash when nothing is staged", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# test\nunstaged only\n");
+
+        const error = yield* (yield* GitCore)
+          .stashCreate({ cwd: tmp, message: "wip", scope: "staged" })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+        expect(error.message).toContain("no staged changes");
+        expect(yield* git(tmp, ["stash", "list"])).toBe("");
+      }),
+    );
+
+    it.effect("explains why a staged-only stash cannot separate a mixed file", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "mixed.txt"), "base\n");
+        yield* git(tmp, ["add", "mixed.txt"]);
+        yield* git(tmp, ["commit", "-m", "add mixed"]);
+        yield* writeTextFile(path.join(tmp, "mixed.txt"), "staged\n");
+        yield* git(tmp, ["add", "mixed.txt"]);
+        yield* writeTextFile(path.join(tmp, "mixed.txt"), "staged and unstaged\n");
+
+        const error = yield* (yield* GitCore)
+          .stashCreate({ cwd: tmp, message: "wip", scope: "staged" })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+        expect(error.message).toContain("Include unstaged changes");
+        // The failed stash leaves the working tree untouched.
+        expect(yield* git(tmp, ["stash", "list"])).toBe("");
+        expect(yield* readTextFile(path.join(tmp, "mixed.txt"))).toBe("staged and unstaged\n");
+      }),
+    );
+
+    it.effect("stashes staged changes too when the unstaged stash asks for them", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "staged.txt"), "staged\n");
+        yield* git(tmp, ["add", "staged.txt"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# test\nunstaged\n");
+
+        yield* (yield* GitCore).stashCreate({
+          cwd: tmp,
+          message: "wip everything",
+          scope: "unstaged",
+          includeStaged: true,
+        });
+
+        expect(yield* git(tmp, ["stash", "list", "--format=%s"])).toContain("wip everything");
+        expect(yield* git(tmp, ["status", "--porcelain"])).toBe("");
+      }),
+    );
+
+    it.effect("stashes with includeStaged even when only the index has changes", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "staged.txt"), "staged\n");
+        yield* git(tmp, ["add", "staged.txt"]);
+
+        yield* (yield* GitCore).stashCreate({
+          cwd: tmp,
+          message: "staged only",
+          scope: "unstaged",
+          includeStaged: true,
+        });
+
+        expect(yield* git(tmp, ["status", "--porcelain"])).toBe("");
+        expect(yield* git(tmp, ["stash", "list", "--format=%s"])).toContain("staged only");
+      }),
+    );
+
+    it.effect("lists every stash entry newest first with its ref, sha, and message", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* writeTextFile(path.join(tmp, "one.txt"), "one\n");
+        yield* core.stashCreate({ cwd: tmp, message: "first", scope: "unstaged" });
+        yield* writeTextFile(path.join(tmp, "two.txt"), "two\n");
+        yield* core.stashCreate({ cwd: tmp, message: "second", scope: "unstaged" });
+
+        const result = yield* core.stashList({ cwd: tmp });
+
+        expect(result.stashes.map((stash) => stash.stashRef)).toEqual(["stash@{0}", "stash@{1}"]);
+        expect(result.stashes[0]!.message).toContain("second");
+        expect(result.stashes[1]!.message).toContain("first");
+        expect(result.stashes[0]!.sha).toMatch(/^[0-9a-f]{40}$/);
+        expect(result.stashes[0]!.createdAt.length).toBeGreaterThan(0);
+      }),
+    );
+
+    it.effect("applies a stash and keeps it, then pops a stash and drops it", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        yield* writeTextFile(path.join(tmp, "parked.txt"), "parked\n");
+        yield* core.stashCreate({ cwd: tmp, message: "parked", scope: "unstaged" });
+        expect(existsSync(path.join(tmp, "parked.txt"))).toBe(false);
+
+        const applied = yield* core.stashApply({ cwd: tmp, stashRef: "stash@{0}", mode: "apply" });
+
+        expect(applied.status).toBe("applied");
+        expect(existsSync(path.join(tmp, "parked.txt"))).toBe(true);
+        expect(yield* git(tmp, ["stash", "list"])).not.toBe("");
+
+        // The restored file blocks the pop until it is removed again.
+        fsSync.rmSync(path.join(tmp, "parked.txt"), { force: true });
+        const popped = yield* core.stashApply({ cwd: tmp, stashRef: "stash@{0}", mode: "pop" });
+
+        expect(popped.status).toBe("applied");
+        expect(existsSync(path.join(tmp, "parked.txt"))).toBe(true);
+        expect(yield* git(tmp, ["stash", "list"])).toBe("");
+      }),
+    );
+
+    it.effect("reports a conflicted apply and keeps the stash entry", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        // The file is tracked before the stash so applying the stash onto a different
+        // committed content is a real content conflict.
+        yield* writeTextFile(path.join(tmp, "conflict.txt"), "base\n");
+        yield* git(tmp, ["add", "conflict.txt"]);
+        yield* git(tmp, ["commit", "-m", "add conflict file"]);
+        yield* writeTextFile(path.join(tmp, "conflict.txt"), "stashed side\n");
+        yield* core.stashCreate({ cwd: tmp, message: "conflict", scope: "unstaged" });
+        yield* writeTextFile(path.join(tmp, "conflict.txt"), "current side\n");
+        yield* git(tmp, ["add", "conflict.txt"]);
+        yield* git(tmp, ["commit", "-m", "current side"]);
+
+        const result = yield* core.stashApply({
+          cwd: tmp,
+          stashRef: "stash@{0}",
+          mode: "apply",
+        });
+
+        expect(result.status).toBe("conflicted");
+        expect(yield* git(tmp, ["diff", "--name-only", "--diff-filter=U"])).toBe("conflict.txt");
+        expect(yield* git(tmp, ["stash", "list"])).not.toBe("");
+      }),
+    );
+  });
+
   // ── checkoutGitBranch ──
 
   describe("checkoutGitBranch", () => {

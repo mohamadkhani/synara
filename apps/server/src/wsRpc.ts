@@ -2529,6 +2529,26 @@ const makeWsRpcHandlersLayer = () =>
             refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.createTag(input))),
             "Failed to create tag",
           ),
+        [WS_METHODS.gitPushBranch]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.pushBranch(input))),
+            "Failed to push branch",
+          ),
+        [WS_METHODS.gitPullBranch]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.pullBranch(input))),
+            "Failed to pull branch",
+          ),
+        [WS_METHODS.gitMergeBranch]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.mergeBranch(input))),
+            "Failed to merge branch",
+          ),
+        [WS_METHODS.gitRebaseBranch]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.rebaseBranch(input))),
+            "Failed to rebase branch",
+          ),
         // The created worktree is the result; its status/PR refresh runs in the background.
         [WS_METHODS.gitCreateWorktree]: (input) =>
           rpcEffect(
@@ -2635,6 +2655,18 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.gitStashInfo]: (input) =>
           rpcEffect(git.stashInfo(input), "Failed to read stash"),
+        [WS_METHODS.gitStashCreate]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.stashCreate(input))),
+            "Failed to create stash",
+          ),
+        [WS_METHODS.gitStashList]: (input) =>
+          rpcEffect(git.stashList(input), "Failed to list stashes"),
+        [WS_METHODS.gitStashApply]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.stashApply(input))),
+            "Failed to apply stash",
+          ),
         [WS_METHODS.gitRemoveIndexLock]: (input) =>
           rpcEffect(
             git.withMutation(input.cwd, git.removeIndexLock(input)),

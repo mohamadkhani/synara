@@ -25,6 +25,11 @@ import type {
   GitDeleteBranchRefInput,
   GitDeleteRefResult,
   GitDeleteTagRefInput,
+  GitBranchActionResult,
+  GitMergeBranchInput,
+  GitPullBranchInput,
+  GitPushBranchInput,
+  GitRebaseBranchInput,
   GitCreateDetachedWorktreeInput,
   GitWorktreeSetupPhase,
   GitCreateDetachedWorktreeResult,
@@ -44,9 +49,15 @@ import type {
   GitRemoveIndexLockInput,
   GitRemoveWorktreeInput,
   GitStashAndCheckoutInput,
+  GitStashApplyInput,
+  GitStashApplyResult,
+  GitStashCreateInput,
+  GitStashCreateResult,
   GitStashDropInput,
   GitStashInfoInput,
   GitStashInfoResult,
+  GitStashListInput,
+  GitStashListResult,
   GitStatusInput,
   GitStatusResult,
   GitWorkingTreeDiffStatsResult,
@@ -413,6 +424,33 @@ export interface GitCoreShape {
     input: GitDeleteTagRefInput,
   ) => Effect.Effect<GitDeleteRefResult, GitCommandError>;
 
+  /** Push a named local branch to a remote, optionally setting its upstream. */
+  readonly pushBranch: (
+    input: GitPushBranchInput,
+  ) => Effect.Effect<GitBranchActionResult, GitCommandError>;
+
+  /**
+   * Pull a remote branch into the current branch, merging or rebasing. A conflict is
+   * aborted before the error is surfaced, so the working tree is left clean.
+   */
+  readonly pullBranch: (input: GitPullBranchInput) => Effect.Effect<GitPullResult, GitCommandError>;
+
+  /**
+   * Merge a ref into the current branch. Requires a clean working tree; a conflict is
+   * aborted before the error is surfaced.
+   */
+  readonly mergeBranch: (
+    input: GitMergeBranchInput,
+  ) => Effect.Effect<GitBranchActionResult, GitCommandError>;
+
+  /**
+   * Rebase the current branch onto a ref. Requires a clean working tree; a conflict is
+   * aborted before the error is surfaced.
+   */
+  readonly rebaseBranch: (
+    input: GitRebaseBranchInput,
+  ) => Effect.Effect<GitBranchActionResult, GitCommandError>;
+
   /**
    * Pull current branch from upstream using fast-forward only.
    */
@@ -547,6 +585,28 @@ export interface GitCoreShape {
   readonly stashInfo: (
     input: GitStashInfoInput,
   ) => Effect.Effect<GitStashInfoResult, GitCommandError>;
+
+  /**
+   * Create a stash from the working-tree rows: only the index (`staged`), only the
+   * working tree while staged changes stay in place (`unstaged`), or the whole tree
+   * when `includeUnstaged` is set on a staged stash.
+   */
+  readonly stashCreate: (
+    input: GitStashCreateInput,
+  ) => Effect.Effect<GitStashCreateResult, GitCommandError>;
+
+  /** Every stash entry, newest first, for the Git Graph stash rows. */
+  readonly stashList: (
+    input: GitStashListInput,
+  ) => Effect.Effect<GitStashListResult, GitCommandError>;
+
+  /**
+   * Apply a stash entry to the working tree, or pop it (apply then drop on success).
+   * A conflicted apply resolves as `conflicted` with the entry kept.
+   */
+  readonly stashApply: (
+    input: GitStashApplyInput,
+  ) => Effect.Effect<GitStashApplyResult, GitCommandError>;
 
   /**
    * Remove the repository index lock file after Git reports a stale lock.

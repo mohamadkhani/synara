@@ -27,6 +27,14 @@ const harness = vi.hoisted(() => ({
   createBranch: vi.fn(),
   createTag: vi.fn(),
   deleteBranchRef: vi.fn(),
+  pushBranch: vi.fn(),
+  pullBranch: vi.fn(),
+  mergeBranch: vi.fn(),
+  rebaseBranch: vi.fn(),
+  stashCreate: vi.fn(),
+  stashList: vi.fn(),
+  stashApply: vi.fn(),
+  stashDrop: vi.fn(),
   confirm: vi.fn(),
   contextMenuShow: vi.fn(),
   listWorktrees: vi.fn(),
@@ -49,6 +57,14 @@ vi.mock("~/nativeApi", () => {
       createBranch: harness.createBranch,
       createTag: harness.createTag,
       deleteBranchRef: harness.deleteBranchRef,
+      pushBranch: harness.pushBranch,
+      pullBranch: harness.pullBranch,
+      mergeBranch: harness.mergeBranch,
+      rebaseBranch: harness.rebaseBranch,
+      stashCreate: harness.stashCreate,
+      stashList: harness.stashList,
+      stashApply: harness.stashApply,
+      stashDrop: harness.stashDrop,
     },
     server: { listWorktrees: harness.listWorktrees },
     dialogs: { confirm: harness.confirm },
@@ -99,6 +115,7 @@ beforeEach(async () => {
     branches: [{ name: "main", current: true, isDefault: true, worktreePath: null }],
     isRepo: true,
     hasOriginRemote: true,
+    remoteNames: ["origin"],
   });
   harness.listCommitHistory.mockResolvedValue({ commits: [commit], hasMore: false });
   harness.workingTreeDiffStats.mockResolvedValue({ additions: 0, deletions: 0, fileCount: 0 });
@@ -121,7 +138,24 @@ beforeEach(async () => {
   harness.createBranch.mockResolvedValue(undefined);
   harness.createTag.mockResolvedValue({ ok: true });
   harness.deleteBranchRef.mockResolvedValue({ remoteName: null, requiresForce: false });
+  harness.pushBranch.mockResolvedValue({ ok: true });
+  harness.pullBranch.mockResolvedValue({
+    status: "pulled",
+    branch: "main",
+    upstreamBranch: "origin/main",
+  });
+  harness.mergeBranch.mockResolvedValue({ ok: true });
+  harness.rebaseBranch.mockResolvedValue({ ok: true });
+  harness.stashCreate.mockReset();
+  harness.stashCreate.mockResolvedValue({ message: "wip" });
+  harness.stashList.mockReset();
+  harness.stashList.mockResolvedValue({ stashes: [] });
+  harness.stashApply.mockReset();
+  harness.stashApply.mockResolvedValue({ status: "applied" });
+  harness.stashDrop.mockReset();
+  harness.stashDrop.mockResolvedValue(undefined);
   harness.confirm.mockResolvedValue(false);
+  harness.contextMenuShow.mockReset();
   harness.contextMenuShow.mockResolvedValue(undefined);
   harness.listWorktrees.mockResolvedValue({ worktrees: [] });
   harness.toastAdd.mockReset();
@@ -183,11 +217,276 @@ describe("GitHistoryPanel", () => {
 
   it("opens the delete dialog from a branch ref context menu", async () => {
     harness.contextMenuShow.mockResolvedValue("delete-branch");
-    await mount();
+    const screen = await mount();
 
     await page.getByTitle("Local branch feature/local").click({ button: "right" });
 
     await expect.element(page.getByRole("button", { name: "Delete" })).toBeVisible();
     expect(harness.deleteBranchRef).not.toHaveBeenCalled();
+    // Unmount with the dialog still open: leaving the portal behind for afterEach's
+    // body reset makes React remove nodes that are no longer its children.
+    await screen.unmount();
+  });
+
+  it("stashes the staged row with the title typed into its dialog", async () => {
+    harness.workingTreeDiffStats.mockResolvedValue({ additions: 1, deletions: 0, fileCount: 1 });
+    harness.contextMenuShow.mockResolvedValue("stash-changes");
+    const screen = await mount();
+
+    await page.getByTitle("Staged changes", { exact: true }).click({ button: "right" });
+
+    const ids = contextMenuIds(
+      harness.contextMenuShow.mock.calls.at(-1)![0] as readonly MenuItemLike[],
+    );
+    expect(ids).toEqual(["stash-changes"]);
+
+    await expect.element(page.getByText("Stash staged changes", { exact: true })).toBeVisible();
+    await page.getByLabelText("Stash title").fill("before the refactor");
+    await page.getByRole("button", { name: "Stash" }).click();
+
+    await vi.waitFor(() =>
+      expect(harness.stashCreate).toHaveBeenCalledWith({
+        cwd: "/repo",
+        message: "before the refactor",
+        scope: "staged",
+        includeUnstaged: false,
+      }),
+    );
+    await screen.unmount();
+  });
+
+  it("stashes the unstaged row without the staged scope", async () => {
+    harness.workingTreeDiffStats.mockResolvedValue({ additions: 1, deletions: 0, fileCount: 1 });
+    harness.contextMenuShow.mockResolvedValue("stash-changes");
+    const screen = await mount();
+
+    await page.getByTitle("Unstaged changes", { exact: true }).click({ button: "right" });
+
+    const ids = contextMenuIds(
+      harness.contextMenuShow.mock.calls.at(-1)![0] as readonly MenuItemLike[],
+    );
+    expect(ids).toEqual(["stash-changes"]);
+
+    await expect.element(page.getByText("Stash unstaged changes", { exact: true })).toBeVisible();
+    await page.getByLabelText("Stash title").fill("scratch edits");
+    await page.getByRole("button", { name: "Stash" }).click();
+
+    await vi.waitFor(() =>
+      expect(harness.stashCreate).toHaveBeenCalledWith({
+        cwd: "/repo",
+        message: "scratch edits",
+        scope: "unstaged",
+        includeStaged: false,
+      }),
+    );
+    await screen.unmount();
+  });
+
+  it("lists stashes and runs pop and delete from their context menu", async () => {
+    harness.stashList.mockResolvedValue({
+      stashes: [
+        {
+          stashRef: "stash@{0}",
+          message: "On main: wip one",
+          sha: "c".repeat(40),
+          createdAt: "2026-11-26T10:00:00Z",
+        },
+      ],
+    });
+    harness.contextMenuShow.mockResolvedValue("stash-pop");
+    const screen = await mount();
+
+    const stashRow = page.getByTitle("stash@{0}: On main: wip one");
+    await expect.element(stashRow).toBeVisible();
+    await stashRow.click({ button: "right" });
+
+    const ids = contextMenuIds(
+      harness.contextMenuShow.mock.calls.at(-1)![0] as readonly MenuItemLike[],
+    );
+    expect(ids).toEqual(["stash-apply", "stash-pop", "stash-delete"]);
+
+    await vi.waitFor(() =>
+      expect(harness.stashApply).toHaveBeenCalledWith({
+        cwd: "/repo",
+        stashRef: "stash@{0}",
+        mode: "pop",
+      }),
+    );
+
+    harness.contextMenuShow.mockResolvedValue("stash-delete");
+    await stashRow.click({ button: "right" });
+
+    await expect.element(page.getByText("Delete stash", { exact: true })).toBeVisible();
+    expect(harness.stashDrop).not.toHaveBeenCalled();
+    await page.getByRole("button", { name: "Delete" }).click();
+
+    await vi.waitFor(() =>
+      expect(harness.stashDrop).toHaveBeenCalledWith({ cwd: "/repo", stashRef: "stash@{0}" }),
+    );
+    await screen.unmount();
+  });
+
+  it("applies a stash without dropping it when the menu asks for apply", async () => {
+    harness.stashList.mockResolvedValue({
+      stashes: [
+        {
+          stashRef: "stash@{1}",
+          message: "On main: parked",
+          sha: "d".repeat(40),
+          createdAt: "2026-11-26T09:00:00Z",
+        },
+      ],
+    });
+    harness.contextMenuShow.mockResolvedValue("stash-apply");
+    const screen = await mount();
+
+    await page.getByTitle("stash@{1}: On main: parked").click({ button: "right" });
+
+    await vi.waitFor(() =>
+      expect(harness.stashApply).toHaveBeenCalledWith({
+        cwd: "/repo",
+        stashRef: "stash@{1}",
+        mode: "apply",
+      }),
+    );
+    await screen.unmount();
+  });
+
+  it("offers push, merge, and rebase for a local branch and runs the push it confirms", async () => {
+    harness.contextMenuShow.mockResolvedValue("branch-push");
+    const screen = await mount();
+
+    await page.getByTitle("Local branch feature/local").click({ button: "right" });
+
+    const ids = contextMenuIds(
+      harness.contextMenuShow.mock.calls.at(-1)![0] as readonly MenuItemLike[],
+    );
+    expect(ids).toContain("checkout-branch");
+    expect(ids).toContain("branch-push");
+    expect(ids).toContain("branch-merge");
+    expect(ids).toContain("branch-rebase");
+
+    await expect.element(page.getByText("Push branch", { exact: true })).toBeVisible();
+    await expect
+      .element(page.getByText("git push --set-upstream origin feature/local"))
+      .toBeVisible();
+    await page.getByRole("button", { name: "Push" }).click();
+
+    await vi.waitFor(() =>
+      expect(harness.pushBranch).toHaveBeenCalledWith({
+        cwd: "/repo",
+        branch: "feature/local",
+        remote: "origin",
+        setUpstream: true,
+        forceWithLease: false,
+      }),
+    );
+    await screen.unmount();
+  });
+
+  it("drops checkout and offers pull for the checked-out branch that tracks an upstream", async () => {
+    harness.listCommitHistory.mockResolvedValue({
+      commits: [{ ...commit, refs: [{ name: "main", kind: "branch", checkedOut: true }] }],
+      hasMore: false,
+    });
+    harness.listBranches.mockResolvedValue({
+      branches: [
+        {
+          name: "main",
+          current: true,
+          isDefault: true,
+          worktreePath: null,
+          upstreamRemote: "origin",
+        },
+      ],
+      isRepo: true,
+      hasOriginRemote: true,
+      remoteNames: ["origin"],
+    });
+    harness.contextMenuShow.mockResolvedValue("branch-pull");
+    const screen = await mount();
+
+    await page.getByTitle("Checked-out branch main").click({ button: "right" });
+
+    const ids = contextMenuIds(
+      harness.contextMenuShow.mock.calls.at(-1)![0] as readonly MenuItemLike[],
+    );
+    expect(ids).not.toContain("checkout-branch");
+    expect(ids).toContain("branch-push");
+    expect(ids).toContain("branch-pull");
+    expect(ids).not.toContain("branch-merge");
+
+    await expect.element(page.getByText("Pull branch", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("git pull origin main")).toBeVisible();
+    await page.getByRole("button", { name: "Pull" }).click();
+
+    await vi.waitFor(() =>
+      expect(harness.pullBranch).toHaveBeenCalledWith({
+        cwd: "/repo",
+        remote: "origin",
+        branch: "main",
+        rebase: false,
+      }),
+    );
+    await screen.unmount();
+  });
+
+  it("hides pull for the checked-out branch when it has no upstream", async () => {
+    harness.listCommitHistory.mockResolvedValue({
+      commits: [{ ...commit, refs: [{ name: "main", kind: "branch", checkedOut: true }] }],
+      hasMore: false,
+    });
+    harness.contextMenuShow.mockResolvedValue(undefined);
+    await mount();
+
+    await page.getByTitle("Checked-out branch main").click({ button: "right" });
+
+    const ids = contextMenuIds(
+      harness.contextMenuShow.mock.calls.at(-1)![0] as readonly MenuItemLike[],
+    );
+    expect(ids).toContain("branch-push");
+    expect(ids).not.toContain("branch-pull");
+  });
+
+  it("offers merge and rebase for a non-current remote branch", async () => {
+    harness.contextMenuShow.mockResolvedValue("branch-rebase");
+    const screen = await mount();
+
+    await page.getByTitle("Remote branch origin/feature").click({ button: "right" });
+
+    const ids = contextMenuIds(
+      harness.contextMenuShow.mock.calls.at(-1)![0] as readonly MenuItemLike[],
+    );
+    expect(ids).toContain("branch-merge");
+    expect(ids).toContain("branch-rebase");
+    expect(ids).not.toContain("branch-pull");
+
+    await expect.element(page.getByText("Rebase branch", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("git rebase origin/feature")).toBeVisible();
+    await page.getByRole("button", { name: "Rebase" }).click();
+
+    await vi.waitFor(() =>
+      expect(harness.rebaseBranch).toHaveBeenCalledWith({
+        cwd: "/repo",
+        ref: "origin/feature",
+        autosquash: false,
+      }),
+    );
+    await screen.unmount();
   });
 });
+
+interface MenuItemLike {
+  id: string;
+  children?: readonly MenuItemLike[];
+}
+
+/** Every id in a context menu, including the rows nested in submenus. */
+function contextMenuIds(items: readonly MenuItemLike[]): string[] {
+  const ids: string[] = [];
+  for (const item of items) {
+    ids.push(item.id);
+    if (item.children) ids.push(...contextMenuIds(item.children));
+  }
+  return ids;
+}

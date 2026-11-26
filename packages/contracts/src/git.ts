@@ -61,6 +61,11 @@ export const GitBranch = Schema.Struct({
   name: TrimmedNonEmptyStringSchema,
   isRemote: Schema.optional(Schema.Boolean),
   remoteName: Schema.optional(TrimmedNonEmptyStringSchema),
+  /**
+   * Local branch only: the remote its configured upstream tracks, when it has one.
+   * The branch menu pushes a branch to its upstream remote instead of guessing.
+   */
+  upstreamRemote: Schema.optional(TrimmedNonEmptyStringSchema),
   current: Schema.Boolean,
   isDefault: Schema.Boolean,
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
@@ -374,6 +379,59 @@ export const GitCommitActionResult = Schema.Struct({
 });
 export type GitCommitActionResult = typeof GitCommitActionResult.Type;
 
+// Branch-level remote and history actions offered from the Git Graph ref menu.
+// Each resolves to a single git command run under the repository mutation lock.
+
+export const GitPushBranchInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  // The local branch to push. Flag-like values are rejected so nothing is read as an option.
+  branch: GitRevisionArgumentSchema,
+  // The remote the client resolved (upstream remote, else origin, else the only remote).
+  // Required so the confirmed command is exactly what runs.
+  remote: GitRevisionArgumentSchema,
+  // Push with `-u`. The client offers it when the branch has no upstream.
+  setUpstream: Schema.optional(Schema.Boolean),
+  // `--force-with-lease`: overwrite the remote ref only while its tracking ref is unchanged.
+  forceWithLease: Schema.optional(Schema.Boolean),
+});
+export type GitPushBranchInput = typeof GitPushBranchInput.Type;
+
+export const GitPullBranchInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  remote: GitRevisionArgumentSchema,
+  // The upstream branch name to pull from `remote`.
+  branch: GitRevisionArgumentSchema,
+  // `--rebase` instead of the default merge.
+  rebase: Schema.optional(Schema.Boolean),
+});
+export type GitPullBranchInput = typeof GitPullBranchInput.Type;
+
+// The three merge options are mutually constrained by git: `--squash` cannot combine
+// with `--no-ff` or `--no-commit`, so a client disables those while squash is set.
+export const GitMergeBranchInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  // The ref to merge into the current branch.
+  ref: GitRevisionArgumentSchema,
+  noFastForward: Schema.optional(Schema.Boolean),
+  squash: Schema.optional(Schema.Boolean),
+  noCommit: Schema.optional(Schema.Boolean),
+});
+export type GitMergeBranchInput = typeof GitMergeBranchInput.Type;
+
+export const GitRebaseBranchInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  // The ref the current branch is rebased onto.
+  ref: GitRevisionArgumentSchema,
+  // Runs `rebase -i --autosquash` with a no-op sequence editor, absorbing
+  // `fixup!`/`squash!` commits without opening a real editor.
+  autosquash: Schema.optional(Schema.Boolean),
+});
+export type GitRebaseBranchInput = typeof GitRebaseBranchInput.Type;
+
+// Fire-and-forget ref mutations; callers refetch status and history afterwards.
+export const GitBranchActionResult = Schema.Struct({ ok: Schema.Boolean });
+export type GitBranchActionResult = typeof GitBranchActionResult.Type;
+
 export const GitDeleteBranchRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
@@ -541,6 +599,34 @@ export const GitStashInfoInput = Schema.Struct({
 });
 export type GitStashInfoInput = typeof GitStashInfoInput.Type;
 
+// Creates a stash from the Git Graph working-tree rows. `unstaged` stashes the
+// working-tree changes and leaves the index in place; `staged` stashes only the index,
+// and `includeUnstaged` extends that to the whole working tree.
+export const GitStashCreateInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  // Required so the stash is identifiable in `git stash list`; shown in the dialog.
+  message: TrimmedNonEmptyStringSchema,
+  scope: Schema.Literals(["staged", "unstaged"]),
+  // Staged scope only: also stash the unstaged and untracked changes.
+  includeUnstaged: Schema.optional(Schema.Boolean),
+  // Unstaged scope only: also stash the staged changes instead of leaving the index.
+  includeStaged: Schema.optional(Schema.Boolean),
+});
+export type GitStashCreateInput = typeof GitStashCreateInput.Type;
+
+export const GitStashListInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+});
+export type GitStashListInput = typeof GitStashListInput.Type;
+
+export const GitStashApplyInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  stashRef: TrimmedNonEmptyStringSchema,
+  // `pop` drops the entry after a clean apply; `apply` always keeps it.
+  mode: Schema.Literals(["apply", "pop"]),
+});
+export type GitStashApplyInput = typeof GitStashApplyInput.Type;
+
 export const GitRemoveIndexLockInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
@@ -694,6 +780,8 @@ export const GitListBranchesResult = Schema.Struct({
   branches: Schema.Array(GitBranch),
   isRepo: Schema.Boolean,
   hasOriginRemote: Schema.Boolean,
+  /** Every configured remote; the branch menu falls back to the only one when there is no origin. */
+  remoteNames: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
 });
 export type GitListBranchesResult = typeof GitListBranchesResult.Type;
 
@@ -746,6 +834,36 @@ export const GitStashInfoResult = Schema.Struct({
   files: Schema.Array(TrimmedNonEmptyStringSchema),
 });
 export type GitStashInfoResult = typeof GitStashInfoResult.Type;
+
+export const GitStashCreateResult = Schema.Struct({
+  message: TrimmedNonEmptyStringSchema,
+});
+export type GitStashCreateResult = typeof GitStashCreateResult.Type;
+
+export const GitStashEntry = Schema.Struct({
+  /** Reflog selector, e.g. `stash@{0}`; the stable handle every action takes. */
+  stashRef: TrimmedNonEmptyStringSchema,
+  /** `git stash list` subject, e.g. `On main: wip`. */
+  message: TrimmedNonEmptyStringSchema,
+  /** Commit id of the stash entry. */
+  sha: TrimmedNonEmptyStringSchema,
+  /** Committer date, ISO-8601, for ordering and the row tooltip. */
+  createdAt: TrimmedNonEmptyStringSchema,
+});
+export type GitStashEntry = typeof GitStashEntry.Type;
+
+export const GitStashListResult = Schema.Struct({
+  stashes: Schema.Array(GitStashEntry),
+});
+export type GitStashListResult = typeof GitStashListResult.Type;
+
+// `conflicted` is a success: the stash was applied but left merge conflicts in the
+// working tree, and the entry is kept so the user can resolve them and drop it.
+export const GitStashApplyResult = Schema.Struct({
+  status: Schema.Literals(["applied", "conflicted"]),
+  detail: Schema.optional(Schema.String),
+});
+export type GitStashApplyResult = typeof GitStashApplyResult.Type;
 
 export const GitResolvePullRequestResult = Schema.Struct({
   pullRequest: GitResolvedPullRequest,

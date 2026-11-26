@@ -746,6 +746,12 @@ export function createWsNativeApi(): NativeApi {
         executionRequest(WS_METHODS.gitDeleteBranchRef, input, { timeoutMs: null }),
       deleteTagRef: (input) =>
         executionRequest(WS_METHODS.gitDeleteTagRef, input, { timeoutMs: null }),
+      pushBranch: (input) => executionRequest(WS_METHODS.gitPushBranch, input, { timeoutMs: null }),
+      pullBranch: (input) => executionRequest(WS_METHODS.gitPullBranch, input, { timeoutMs: null }),
+      mergeBranch: (input) =>
+        executionRequest(WS_METHODS.gitMergeBranch, input, { timeoutMs: null }),
+      rebaseBranch: (input) =>
+        executionRequest(WS_METHODS.gitRebaseBranch, input, { timeoutMs: null }),
       createWorktree: (input) => executionRequest(WS_METHODS.gitCreateWorktree, input),
       // Worktree materialization scales with checkout size; progress events
       // keep the UI honest while the stream runs, so no fixed timeout.
@@ -759,6 +765,10 @@ export function createWsNativeApi(): NativeApi {
       stashAndCheckout: (input) => executionRequest(WS_METHODS.gitStashAndCheckout, input),
       stashDrop: (input) => executionRequest(WS_METHODS.gitStashDrop, input),
       stashInfo: (input) => executionRequest(WS_METHODS.gitStashInfo, input),
+      stashCreate: (input) =>
+        executionRequest(WS_METHODS.gitStashCreate, input, { timeoutMs: null }),
+      stashList: (input) => executionRequest(WS_METHODS.gitStashList, input),
+      stashApply: (input) => executionRequest(WS_METHODS.gitStashApply, input, { timeoutMs: null }),
       removeIndexLock: (input) => executionRequest(WS_METHODS.gitRemoveIndexLock, input),
       init: (input) => executionRequest(WS_METHODS.gitInit, input),
       stageFiles: (input) => executionRequest(WS_METHODS.gitStageFiles, input),

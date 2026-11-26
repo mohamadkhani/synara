@@ -15,13 +15,18 @@ import { Effect, Result } from "effect";
 import {
   DEFAULT_GIT_COMMIT_HISTORY_LIMIT,
   MAX_GIT_COMMIT_HISTORY_LIMIT,
+  type GitBranchActionResult,
   type GitCheckoutRemoteBranchResult,
   type GitCommitActionResult,
   type GitCreateTagResult,
   type GitDeleteRefResult,
   type GitHistoryCommit,
   type GitListCommitHistoryResult,
+  type GitPullResult,
   type GitReadCommitDiffResult,
+  type GitStashApplyResult,
+  type GitStashCreateResult,
+  type GitStashListResult,
 } from "@synara/contracts";
 
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
@@ -74,6 +79,8 @@ export interface GitHistoryOpsDeps {
   ) => Effect.Effect<void, GitCommandError>;
   checkoutBranch: GitCoreShape["checkoutBranch"];
   deleteBranch: GitCoreShape["deleteBranch"];
+  /** Precondition read for the dirty-working-tree guard and the current branch name. */
+  readActionStatus: GitCoreShape["readActionStatus"];
   resolvePushRemoteName: (
     cwd: string,
     branch: string,
@@ -102,6 +109,13 @@ export function makeGitHistoryOps(deps: GitHistoryOpsDeps): {
   createTag: GitCoreShape["createTag"];
   deleteBranchRef: GitCoreShape["deleteBranchRef"];
   deleteTagRef: GitCoreShape["deleteTagRef"];
+  pushBranch: GitCoreShape["pushBranch"];
+  pullBranch: GitCoreShape["pullBranch"];
+  mergeBranch: GitCoreShape["mergeBranch"];
+  rebaseBranch: GitCoreShape["rebaseBranch"];
+  stashCreate: GitCoreShape["stashCreate"];
+  stashList: GitCoreShape["stashList"];
+  stashApply: GitCoreShape["stashApply"];
 } {
   const {
     executeGit,
@@ -110,12 +124,18 @@ export function makeGitHistoryOps(deps: GitHistoryOpsDeps): {
     assertUsableRefName,
     checkoutBranch,
     deleteBranch,
+    readActionStatus,
     resolvePushRemoteName,
     createGitCommandError,
     parseDirtyWorktreeFiles,
     isMissingGitCwdError,
     mutationOptions,
   } = deps;
+
+  // Lines Git prints when `stash apply`/`pop` leaves merge conflicts behind. Git reports
+  // a conflicted apply on stdout ("Auto-merging ...", "CONFLICT ..."), so both streams
+  // are searched.
+  const CONFLICT_MARKERS = ["CONFLICT (", "Merge conflict in", "Automatic merge failed"];
 
   const COMMIT_HISTORY_PATCH_MAX_OUTPUT_BYTES = 10_000_000;
   const COMMIT_HISTORY_TIMEOUT_MS = 20_000;
@@ -707,6 +727,391 @@ export function makeGitHistoryOps(deps: GitHistoryOpsDeps): {
       return { remoteName } satisfies GitDeleteRefResult;
     });
 
+  /** Reads HEAD's object id; empty when the branch is unborn. */
+  const readHeadObjectId = (operation: string, cwd: string) =>
+    executeGit(operation, cwd, ["rev-parse", "HEAD"], {
+      timeoutMs: 5_000,
+      allowNonZeroExit: true,
+    }).pipe(Effect.map((result) => result.stdout.trim()));
+
+  /**
+   * The checked-out branch name, or empty on a detached HEAD. Pull reads the branch this
+   * way instead of `readActionStatus`, whose upstream refresh would fetch at the same time
+   * as the pull's own fetch and race on the remote-tracking ref lock.
+   */
+  const readCurrentBranchName = (operation: string, cwd: string) =>
+    executeGit(operation, cwd, ["symbolic-ref", "--short", "-q", "HEAD"], {
+      timeoutMs: 5_000,
+      allowNonZeroExit: true,
+    }).pipe(Effect.map((result) => (result.code === 0 ? result.stdout.trim() : "")));
+
+  /**
+   * Clears an in-progress merge/rebase after a failed action so the working tree is
+   * left clean. The abort is best-effort: when the failure never created that state
+   * (a rejected push-style refusal, a dirty-tree rejection) the command errors and is
+   * ignored, and the original failure is what the caller reports.
+   */
+  const abortGitOperation = (operation: string, cwd: string, args: ReadonlyArray<string>) =>
+    executeGit(operation, cwd, args, { ...mutationOptions, allowNonZeroExit: true }).pipe(
+      Effect.catch(() => Effect.void),
+      Effect.asVoid,
+    );
+
+  /** Merge and rebase must not run over uncommitted work; git would refuse or straddle it. */
+  const assertCleanWorkingTree = (
+    operation: string,
+    cwd: string,
+    args: ReadonlyArray<string>,
+  ): Effect.Effect<void, GitCommandError> =>
+    Effect.gen(function* () {
+      const status = yield* readActionStatus(cwd);
+      if (status.hasWorkingTreeChanges) {
+        return yield* createGitCommandError(
+          operation,
+          cwd,
+          args,
+          "Commit or stash your changes before merging or rebasing.",
+        );
+      }
+    });
+
+  const pushBranch: GitCoreShape["pushBranch"] = (input) =>
+    Effect.gen(function* () {
+      const args = [
+        "push",
+        ...(input.setUpstream === true ? ["--set-upstream"] : []),
+        ...(input.forceWithLease === true ? ["--force-with-lease"] : []),
+        input.remote,
+        input.branch,
+      ];
+      const result = yield* executeGit("GitCore.pushBranch", input.cwd, args, {
+        ...mutationOptions,
+        allowNonZeroExit: true,
+      });
+      if (result.code !== 0) {
+        return yield* commitActionFailure(
+          "GitCore.pushBranch",
+          input.cwd,
+          args,
+          result.stderr,
+          "git push failed",
+        );
+      }
+      return { ok: true } satisfies GitBranchActionResult;
+    });
+
+  const pullBranch: GitCoreShape["pullBranch"] = (input) =>
+    Effect.gen(function* () {
+      const branch = yield* readCurrentBranchName("GitCore.pullBranch.branch", input.cwd);
+      if (!branch) {
+        return yield* createGitCommandError(
+          "GitCore.pullBranch",
+          input.cwd,
+          ["pull"],
+          "Cannot pull from detached HEAD.",
+        );
+      }
+      const rebase = input.rebase === true;
+      const args = ["pull", ...(rebase ? ["--rebase"] : []), input.remote, input.branch];
+      const beforeSha = yield* readHeadObjectId("GitCore.pullBranch.beforeSha", input.cwd);
+      const result = yield* executeGit("GitCore.pullBranch", input.cwd, args, {
+        ...mutationOptions,
+        allowNonZeroExit: true,
+      });
+      if (result.code !== 0) {
+        yield* abortGitOperation(
+          "GitCore.pullBranch.abort",
+          input.cwd,
+          rebase ? ["rebase", "--abort"] : ["merge", "--abort"],
+        );
+        return yield* commitActionFailure(
+          "GitCore.pullBranch",
+          input.cwd,
+          args,
+          result.stderr,
+          "git pull failed",
+        );
+      }
+      const afterSha = yield* readHeadObjectId("GitCore.pullBranch.afterSha", input.cwd);
+      return {
+        status: beforeSha.length > 0 && beforeSha === afterSha ? "skipped_up_to_date" : "pulled",
+        branch,
+        upstreamBranch: `${input.remote}/${input.branch}`,
+      } satisfies GitPullResult;
+    });
+
+  const mergeBranch: GitCoreShape["mergeBranch"] = (input) =>
+    Effect.gen(function* () {
+      // `--squash` cannot combine with `--no-ff` or `--no-commit`; the caller disables
+      // those while squash is set, and this never emits an invalid combination.
+      const squash = input.squash === true;
+      const args = [
+        "merge",
+        ...(squash ? ["--squash"] : []),
+        ...(!squash && input.noFastForward === true ? ["--no-ff"] : []),
+        ...(!squash && input.noCommit === true ? ["--no-commit"] : []),
+        input.ref,
+      ];
+      yield* assertCleanWorkingTree("GitCore.mergeBranch.dirtyCheck", input.cwd, args);
+      const result = yield* executeGit("GitCore.mergeBranch", input.cwd, args, {
+        ...mutationOptions,
+        allowNonZeroExit: true,
+      });
+      if (result.code !== 0) {
+        // `--squash` never writes MERGE_HEAD, so `merge --abort` refuses and the conflicts
+        // would stay in the tree. The tree was clean before this command, so resetting to
+        // HEAD discards exactly this merge's work.
+        yield* abortGitOperation(
+          "GitCore.mergeBranch.abort",
+          input.cwd,
+          squash ? ["reset", "--merge", "HEAD"] : ["merge", "--abort"],
+        );
+        return yield* commitActionFailure(
+          "GitCore.mergeBranch",
+          input.cwd,
+          args,
+          result.stderr,
+          "git merge failed",
+        );
+      }
+      return { ok: true } satisfies GitBranchActionResult;
+    });
+
+  const rebaseBranch: GitCoreShape["rebaseBranch"] = (input) =>
+    Effect.gen(function* () {
+      const autosquash = input.autosquash === true;
+      // A GUI has no terminal editor, so autosquash runs `rebase -i` with a no-op
+      // sequence editor: autosquash rewrites the todo list, the editor accepts it,
+      // and GIT_EDITOR covers the combined message of a `squash!` commit.
+      const args = autosquash
+        ? ["rebase", "--interactive", "--autosquash", input.ref]
+        : ["rebase", input.ref];
+      yield* assertCleanWorkingTree("GitCore.rebaseBranch.dirtyCheck", input.cwd, args);
+      const result = yield* executeGit("GitCore.rebaseBranch", input.cwd, args, {
+        ...mutationOptions,
+        allowNonZeroExit: true,
+        ...(autosquash ? { env: { GIT_SEQUENCE_EDITOR: "true", GIT_EDITOR: "true" } } : {}),
+      });
+      if (result.code !== 0) {
+        yield* abortGitOperation("GitCore.rebaseBranch.abort", input.cwd, ["rebase", "--abort"]);
+        return yield* commitActionFailure(
+          "GitCore.rebaseBranch",
+          input.cwd,
+          args,
+          result.stderr,
+          "git rebase failed",
+        );
+      }
+      return { ok: true } satisfies GitBranchActionResult;
+    });
+
+  /**
+   * Whether the index and the working tree hold changes the stash rows can act on, and
+   * whether any file has staged and unstaged edits at once. That last case is the one
+   * `git stash push --staged` cannot split: it saves the stash, then fails to restore the
+   * worktree, so the caller rejects it before git runs.
+   */
+  const readStashPresence = (operation: string, cwd: string) =>
+    Effect.gen(function* () {
+      const staged = yield* executeGit(operation, cwd, ["diff", "--cached", "--quiet"], {
+        timeoutMs: 10_000,
+        allowNonZeroExit: true,
+      });
+      const unstaged = yield* executeGit(operation, cwd, ["diff", "--quiet"], {
+        timeoutMs: 10_000,
+        allowNonZeroExit: true,
+      });
+      const untracked = yield* executeGit(
+        operation,
+        cwd,
+        ["ls-files", "--others", "--exclude-standard"],
+        { timeoutMs: 10_000, allowNonZeroExit: true },
+      );
+      const status = yield* executeGit(
+        operation,
+        cwd,
+        ["status", "--porcelain=v1", "--untracked-files=no"],
+        { timeoutMs: 10_000, allowNonZeroExit: true },
+      );
+      // A porcelain row is XY where X is the index and Y the worktree; both set on one
+      // path means a staged and an unstaged edit share a file.
+      const hasMixedChanges = status.stdout
+        .split("\n")
+        .some((line) => line.length > 1 && line[0] !== " " && line[1] !== " ");
+      // `git diff --quiet` exits 1 exactly when there is something to stash.
+      return {
+        hasStaged: staged.code === 1,
+        hasUnstaged:
+          unstaged.code === 1 || (untracked.code === 0 && untracked.stdout.trim().length > 0),
+        hasMixedChanges,
+      };
+    });
+
+  /** Object id of the newest stash entry, or empty when there is none. */
+  const readStashObjectId = (operation: string, cwd: string) =>
+    executeGit(operation, cwd, ["rev-parse", "--verify", "--quiet", "refs/stash"], {
+      timeoutMs: 5_000,
+      allowNonZeroExit: true,
+    }).pipe(Effect.map((result) => (result.code === 0 ? result.stdout.trim() : "")));
+
+  const stashCreate: GitCoreShape["stashCreate"] = (input) =>
+    Effect.gen(function* () {
+      const stagedOnly = input.scope === "staged" && input.includeUnstaged !== true;
+      const unstagedKeepsIndex = input.scope === "unstaged" && input.includeStaged !== true;
+      const args =
+        input.scope === "unstaged"
+          ? // Without "include staged", keep the index where it is: the unstaged changes
+            // leave the working tree and the staged ones stay visible, which is what the
+            // row promises. With it, the whole tree is stashed.
+            unstagedKeepsIndex
+            ? ["stash", "push", "--keep-index", "--include-untracked", "-m", input.message]
+            : ["stash", "push", "--include-untracked", "-m", input.message]
+          : stagedOnly
+            ? ["stash", "push", "--staged", "-m", input.message]
+            : ["stash", "push", "--include-untracked", "-m", input.message];
+
+      const presence = yield* readStashPresence("GitCore.stashCreate.presence", input.cwd);
+      if (stagedOnly && !presence.hasStaged) {
+        return yield* createGitCommandError(
+          "GitCore.stashCreate",
+          input.cwd,
+          args,
+          "There are no staged changes to stash.",
+        );
+      }
+      if (stagedOnly && presence.hasMixedChanges) {
+        return yield* createGitCommandError(
+          "GitCore.stashCreate",
+          input.cwd,
+          args,
+          "Git cannot stash only the staged changes while a file also has unstaged edits. Include unstaged changes, or stash the unstaged changes first.",
+        );
+      }
+      if (unstagedKeepsIndex && !presence.hasUnstaged) {
+        return yield* createGitCommandError(
+          "GitCore.stashCreate",
+          input.cwd,
+          args,
+          "There are no unstaged changes to stash.",
+        );
+      }
+      if (!presence.hasStaged && !presence.hasUnstaged) {
+        return yield* createGitCommandError(
+          "GitCore.stashCreate",
+          input.cwd,
+          args,
+          "There are no changes to stash.",
+        );
+      }
+
+      // `--staged` can still save an entry before it refuses to restore the worktree
+      // (older Git, or a change the status pre-check could not classify). Drop the
+      // entry it just made so a failed dialog leaves the repository as it was.
+      const stashBefore = stagedOnly
+        ? yield* readStashObjectId("GitCore.stashCreate.stashBefore", input.cwd)
+        : "";
+      const result = yield* executeGit("GitCore.stashCreate", input.cwd, args, {
+        ...mutationOptions,
+        allowNonZeroExit: true,
+      });
+      if (result.code !== 0) {
+        if (stagedOnly && result.stderr.includes("Cannot remove worktree changes")) {
+          const stashAfter = yield* readStashObjectId("GitCore.stashCreate.stashAfter", input.cwd);
+          if (stashAfter.length > 0 && stashAfter !== stashBefore) {
+            yield* executeGit("GitCore.stashCreate.rollback", input.cwd, ["stash", "drop"], {
+              ...mutationOptions,
+              allowNonZeroExit: true,
+            });
+          }
+          return yield* createGitCommandError(
+            "GitCore.stashCreate",
+            input.cwd,
+            args,
+            "Git cannot stash only the staged changes while a file also has unstaged edits. Include unstaged changes, or stash the unstaged changes first.",
+          );
+        }
+        return yield* commitActionFailure(
+          "GitCore.stashCreate",
+          input.cwd,
+          args,
+          result.stderr,
+          "git stash failed",
+        );
+      }
+      return { message: input.message } satisfies GitStashCreateResult;
+    });
+
+  const stashList: GitCoreShape["stashList"] = (input) =>
+    Effect.gen(function* () {
+      const format = "%gd%x09%H%x09%cI%x09%gs";
+      const result = yield* executeGit(
+        "GitCore.stashList",
+        input.cwd,
+        ["stash", "list", `--format=${format}`],
+        { timeoutMs: 15_000, allowNonZeroExit: true },
+      );
+      if (result.code !== 0) {
+        return yield* commitActionFailure(
+          "GitCore.stashList",
+          input.cwd,
+          ["stash", "list", `--format=${format}`],
+          result.stderr,
+          "git stash list failed",
+        );
+      }
+      const stashes = result.stdout
+        .split("\n")
+        .map((line) => line.trimEnd())
+        .filter((line) => line.length > 0)
+        .flatMap((line) => {
+          const [stashRef, sha, createdAt, message] = line.split("\t");
+          // A malformed row is dropped rather than rendered as an action target that
+          // would fail every command it feeds.
+          if (!stashRef || !sha || !createdAt || !message) return [];
+          return [
+            {
+              stashRef: stashRef.trim(),
+              sha: sha.trim(),
+              createdAt: createdAt.trim(),
+              message: message.trim(),
+            },
+          ];
+        });
+      return { stashes } satisfies GitStashListResult;
+    });
+
+  const stashApply: GitCoreShape["stashApply"] = (input) =>
+    Effect.gen(function* () {
+      const args = ["stash", input.mode, input.stashRef];
+      const result = yield* executeGit("GitCore.stashApply", input.cwd, args, {
+        ...mutationOptions,
+        allowNonZeroExit: true,
+      });
+      if (result.code === 0) {
+        return { status: "applied" } satisfies GitStashApplyResult;
+      }
+      const stderr = result.stderr.trim();
+      // Git's own markers, not the word "conflict": a path may be named after it. A
+      // conflicted apply still leaves the changes in the working tree and keeps the entry
+      // (pop included, because the drop only runs after a clean apply), so it is reported
+      // as a warning the caller can act on instead of a retryable failure.
+      const output = `${result.stdout}\n${stderr}`;
+      if (CONFLICT_MARKERS.some((marker) => output.includes(marker))) {
+        const detail = result.stdout.trim() || stderr;
+        return {
+          status: "conflicted",
+          ...(detail.length > 0 ? { detail } : {}),
+        } satisfies GitStashApplyResult;
+      }
+      return yield* commitActionFailure(
+        "GitCore.stashApply",
+        input.cwd,
+        args,
+        stderr || result.stdout.trim(),
+        "git stash apply failed",
+      );
+    });
+
   return {
     listCommitHistory,
     readCommitDiff,
@@ -717,5 +1122,12 @@ export function makeGitHistoryOps(deps: GitHistoryOpsDeps): {
     createTag,
     deleteBranchRef,
     deleteTagRef,
+    pushBranch,
+    pullBranch,
+    mergeBranch,
+    rebaseBranch,
+    stashCreate,
+    stashList,
+    stashApply,
   };
 }

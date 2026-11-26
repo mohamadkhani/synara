@@ -58,6 +58,7 @@ export const gitQueryKeys = {
   commitDiff: (cwd: string | null, sha: string | null) => ["git", "commit-diff", cwd, sha] as const,
   pullRequest: (cwd: string | null) => ["git", "pull-request", cwd] as const,
   workingTreeDiffs: (cwd: string | null) => ["git", "working-tree-diff", cwd] as const,
+  stashes: (cwd: string | null) => ["git", "stash", cwd] as const,
   workingTreeDiff: (
     cwd: string | null,
     scope: GitReadWorkingTreeDiffInput["scope"] = "workingTree",
@@ -127,6 +128,13 @@ export const gitMutationKeys = {
   createTag: (cwd: string | null) => ["git", "mutation", "create-tag", cwd] as const,
   deleteBranchRef: (cwd: string | null) => ["git", "mutation", "delete-branch-ref", cwd] as const,
   deleteTagRef: (cwd: string | null) => ["git", "mutation", "delete-tag-ref", cwd] as const,
+  pushBranch: (cwd: string | null) => ["git", "mutation", "push-branch", cwd] as const,
+  pullBranch: (cwd: string | null) => ["git", "mutation", "pull-branch", cwd] as const,
+  mergeBranch: (cwd: string | null) => ["git", "mutation", "merge-branch", cwd] as const,
+  rebaseBranch: (cwd: string | null) => ["git", "mutation", "rebase-branch", cwd] as const,
+  stashCreate: (cwd: string | null) => ["git", "mutation", "stash-create", cwd] as const,
+  stashApply: (cwd: string | null) => ["git", "mutation", "stash-apply", cwd] as const,
+  stashDrop: (cwd: string | null) => ["git", "mutation", "stash-drop", cwd] as const,
 };
 
 type GitRefreshDepth = "availability" | "active-details";
@@ -312,6 +320,7 @@ function activeGitDetailQueries(queryClient: QueryClient, cwd: string, includeRe
       queryKey: gitQueryKeys.workingTreeDiffs(cwd),
       type: "active",
     }),
+    ...queryCache.findAll({ queryKey: gitQueryKeys.stashes(cwd), type: "active" }),
     ...(includeRemote
       ? queryCache.findAll({ queryKey: gitQueryKeys.pullRequest(cwd), type: "active" })
       : []),
@@ -340,6 +349,10 @@ async function refreshActiveGitDetails(
   await Promise.all([
     queryClient.invalidateQueries({
       queryKey: gitQueryKeys.workingTreeDiffs(cwd),
+      refetchType: "none",
+    }),
+    queryClient.invalidateQueries({
+      queryKey: gitQueryKeys.stashes(cwd),
       refetchType: "none",
     }),
     includeRemote
@@ -821,6 +834,27 @@ export function gitWorkingTreeDiffStatsQueryOptions(input: {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     ...GIT_EXPENSIVE_READ_RETRY_OPTIONS,
+  });
+}
+
+export function gitStashListQueryOptions(input: {
+  cwd: string | null;
+  enabled?: boolean;
+  refetchInterval?: number | false;
+}) {
+  const refetchInterval = input.refetchInterval;
+  return queryOptions({
+    queryKey: gitQueryKeys.stashes(input.cwd),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd) throw new Error("The stash list is unavailable.");
+      return api.git.stashList({ cwd: input.cwd });
+    },
+    enabled: (input.enabled ?? true) && input.cwd !== null,
+    staleTime: GIT_WORKING_TREE_DIFF_STALE_TIME_MS,
+    ...(refetchInterval !== undefined ? { refetchInterval } : {}),
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 }
 
@@ -1346,5 +1380,152 @@ export function gitCheckoutRemoteBranchMutationOptions(input: {
     unavailableMessage: "Checking out a remote branch is unavailable.",
     invalidate: "cwd",
     run: (api, cwd, { remoteBranch }) => api.git.checkoutRemoteBranch({ cwd, remoteBranch }),
+  });
+}
+
+export function gitPushBranchMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { branch: string; remote: string; setUpstream?: boolean; forceWithLease?: boolean },
+    Awaited<ReturnType<NativeApi["git"]["pushBranch"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.pushBranch(input.cwd),
+    unavailableMessage: "Pushing a branch is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { branch, remote, setUpstream, forceWithLease }) =>
+      api.git.pushBranch({
+        cwd,
+        branch,
+        remote,
+        ...(setUpstream !== undefined ? { setUpstream } : {}),
+        ...(forceWithLease !== undefined ? { forceWithLease } : {}),
+      }),
+  });
+}
+
+export function gitPullBranchMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { remote: string; branch: string; rebase?: boolean },
+    Awaited<ReturnType<NativeApi["git"]["pullBranch"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.pullBranch(input.cwd),
+    unavailableMessage: "Pulling a branch is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { remote, branch, rebase }) =>
+      api.git.pullBranch({ cwd, remote, branch, ...(rebase !== undefined ? { rebase } : {}) }),
+  });
+}
+
+export function gitMergeBranchMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { ref: string; noFastForward?: boolean; squash?: boolean; noCommit?: boolean },
+    Awaited<ReturnType<NativeApi["git"]["mergeBranch"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.mergeBranch(input.cwd),
+    unavailableMessage: "Merging a branch is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { ref, noFastForward, squash, noCommit }) =>
+      api.git.mergeBranch({
+        cwd,
+        ref,
+        ...(noFastForward !== undefined ? { noFastForward } : {}),
+        ...(squash !== undefined ? { squash } : {}),
+        ...(noCommit !== undefined ? { noCommit } : {}),
+      }),
+  });
+}
+
+export function gitRebaseBranchMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { ref: string; autosquash?: boolean },
+    Awaited<ReturnType<NativeApi["git"]["rebaseBranch"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.rebaseBranch(input.cwd),
+    unavailableMessage: "Rebasing a branch is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { ref, autosquash }) =>
+      api.git.rebaseBranch({ cwd, ref, ...(autosquash !== undefined ? { autosquash } : {}) }),
+  });
+}
+
+export function gitStashCreateMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    {
+      message: string;
+      scope: "staged" | "unstaged";
+      includeUnstaged?: boolean;
+      includeStaged?: boolean;
+    },
+    Awaited<ReturnType<NativeApi["git"]["stashCreate"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.stashCreate(input.cwd),
+    unavailableMessage: "Creating a stash is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { message, scope, includeUnstaged, includeStaged }) =>
+      api.git.stashCreate({
+        cwd,
+        message,
+        scope,
+        ...(includeUnstaged !== undefined ? { includeUnstaged } : {}),
+        ...(includeStaged !== undefined ? { includeStaged } : {}),
+      }),
+  });
+}
+
+export function gitStashApplyMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { stashRef: string; mode: "apply" | "pop" },
+    Awaited<ReturnType<NativeApi["git"]["stashApply"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.stashApply(input.cwd),
+    unavailableMessage: "Applying a stash is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { stashRef, mode }) => api.git.stashApply({ cwd, stashRef, mode }),
+  });
+}
+
+export function gitStashDropMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { stashRef: string },
+    Awaited<ReturnType<NativeApi["git"]["stashDrop"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.stashDrop(input.cwd),
+    unavailableMessage: "Dropping a stash is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, { stashRef }) => api.git.stashDrop({ cwd, stashRef }),
   });
 }

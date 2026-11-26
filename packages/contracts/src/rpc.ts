@@ -235,6 +235,11 @@ import {
   GitDeleteBranchRefInput,
   GitDeleteRefResult,
   GitDeleteTagRefInput,
+  GitBranchActionResult,
+  GitMergeBranchInput,
+  GitPullBranchInput,
+  GitPushBranchInput,
+  GitRebaseBranchInput,
   GitListCommitHistoryInput,
   GitListCommitHistoryResult,
   GitReadCommitDiffInput,
@@ -278,9 +283,15 @@ import {
   GitStageFilesInput,
   GitStageFilesResult,
   GitStashAndCheckoutInput,
+  GitStashApplyInput,
+  GitStashApplyResult,
+  GitStashCreateInput,
+  GitStashCreateResult,
   GitStashDropInput,
   GitStashInfoInput,
   GitStashInfoResult,
+  GitStashListInput,
+  GitStashListResult,
   GitStatusInput,
   GitStatusResult,
   GitSummarizeDiffInput,
@@ -1433,6 +1444,24 @@ export const WsGitStashInfoRpc = Rpc.make(WS_METHODS.gitStashInfo, {
   error: WsRpcError,
 });
 
+export const WsGitStashCreateRpc = Rpc.make(WS_METHODS.gitStashCreate, {
+  payload: GitStashCreateInput,
+  success: GitStashCreateResult,
+  error: WsRpcError,
+});
+
+export const WsGitStashListRpc = Rpc.make(WS_METHODS.gitStashList, {
+  payload: GitStashListInput,
+  success: GitStashListResult,
+  error: WsRpcError,
+});
+
+export const WsGitStashApplyRpc = Rpc.make(WS_METHODS.gitStashApply, {
+  payload: GitStashApplyInput,
+  success: GitStashApplyResult,
+  error: WsRpcError,
+});
+
 export const WsGitRemoveIndexLockRpc = Rpc.make(WS_METHODS.gitRemoveIndexLock, {
   payload: GitRemoveIndexLockInput,
   success: Schema.Void,
@@ -1460,6 +1489,30 @@ export const WsGitUnstageFilesRpc = Rpc.make(WS_METHODS.gitUnstageFiles, {
 export const WsGitHandoffThreadRpc = Rpc.make(WS_METHODS.gitHandoffThread, {
   payload: GitHandoffThreadInput,
   success: GitHandoffThreadResult,
+  error: WsRpcError,
+});
+
+export const WsGitPushBranchRpc = Rpc.make(WS_METHODS.gitPushBranch, {
+  payload: GitPushBranchInput,
+  success: GitBranchActionResult,
+  error: WsRpcError,
+});
+
+export const WsGitPullBranchRpc = Rpc.make(WS_METHODS.gitPullBranch, {
+  payload: GitPullBranchInput,
+  success: GitPullResult,
+  error: WsRpcError,
+});
+
+export const WsGitMergeBranchRpc = Rpc.make(WS_METHODS.gitMergeBranch, {
+  payload: GitMergeBranchInput,
+  success: GitBranchActionResult,
+  error: WsRpcError,
+});
+
+export const WsGitRebaseBranchRpc = Rpc.make(WS_METHODS.gitRebaseBranch, {
+  payload: GitRebaseBranchInput,
+  success: GitBranchActionResult,
   error: WsRpcError,
 });
 
@@ -2516,6 +2569,13 @@ export type WsFeatureRpc =
   | typeof WsGitStageFilesRpc
   | typeof WsGitUnstageFilesRpc
   | typeof WsGitHandoffThreadRpc
+  | typeof WsGitStashCreateRpc
+  | typeof WsGitStashListRpc
+  | typeof WsGitStashApplyRpc
+  | typeof WsGitPushBranchRpc
+  | typeof WsGitPullBranchRpc
+  | typeof WsGitMergeBranchRpc
+  | typeof WsGitRebaseBranchRpc
   | typeof WsTerminalOpenRpc
   | typeof WsTerminalWriteRpc
   | typeof WsTerminalAckOutputRpc
@@ -2733,6 +2793,13 @@ const wsApplicationRpcGroup = RpcGroup.make(
   WsGitStageFilesRpc,
   WsGitUnstageFilesRpc,
   WsGitHandoffThreadRpc,
+  WsGitStashCreateRpc,
+  WsGitStashListRpc,
+  WsGitStashApplyRpc,
+  WsGitPushBranchRpc,
+  WsGitPullBranchRpc,
+  WsGitMergeBranchRpc,
+  WsGitRebaseBranchRpc,
   WsTerminalOpenRpc,
   WsTerminalWriteRpc,
   WsTerminalAckOutputRpc,

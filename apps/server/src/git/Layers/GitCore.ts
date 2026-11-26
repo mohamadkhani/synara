@@ -34,6 +34,7 @@ import {
   DEFAULT_GIT_RECENT_COMMIT_LIMIT,
   GIT_READ_FILE_AT_REV_MAX_BYTES,
   type GitBlameLineResult,
+  type GitBranch,
   type GitRecentCommit,
 } from "@synara/contracts";
 import { isTemporaryWorktreeBranch } from "@synara/shared/git";
@@ -1668,6 +1669,41 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         return branchLastCommit;
       });
 
+    /** Local branch name → the remote its configured upstream tracks, when any. */
+    const readBranchUpstreamRemotes = (
+      cwd: string,
+    ): Effect.Effect<Map<string, string>, GitCommandError> =>
+      Effect.gen(function* () {
+        const result = yield* executeGit(
+          "GitCore.readBranchUpstreamRemotes",
+          cwd,
+          ["for-each-ref", "--format=%(refname:short)%09%(upstream:remotename)", "refs/heads"],
+          {
+            timeoutMs: 15_000,
+            allowNonZeroExit: true,
+          },
+        );
+
+        const upstreamRemotes = new Map<string, string>();
+        if (result.code !== 0) {
+          return upstreamRemotes;
+        }
+
+        for (const line of result.stdout.split("\n")) {
+          if (line.length === 0) {
+            continue;
+          }
+          const [name, remoteName] = line.split("\t");
+          // `.` means the upstream is a local branch, not a remote; it must not become a
+          // push target.
+          if (name && remoteName && remoteName.length > 0 && remoteName !== ".") {
+            upstreamRemotes.set(name, remoteName);
+          }
+        }
+
+        return upstreamRemotes;
+      });
+
     const readStatusDetails = (
       cwd: string,
       refreshUpstream: boolean,
@@ -3261,6 +3297,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         const branchRecencyPromise = readBranchRecency(input.cwd).pipe(
           Effect.catch(() => Effect.succeed(new Map<string, number>())),
         );
+        const branchUpstreamPromise = readBranchUpstreamRemotes(input.cwd).pipe(
+          Effect.catch(() => Effect.succeed(new Map<string, string>())),
+        );
         const localBranchResult = yield* executeGit(
           "GitCore.listBranches.branchNoColor",
           input.cwd,
@@ -3347,6 +3386,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             remoteBranchResultEffect,
             remoteNamesResultEffect,
             branchRecencyPromise,
+            branchUpstreamPromise,
           ],
           { concurrency: "unbounded" },
         ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
@@ -3354,8 +3394,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           return { branches: [], isRepo: false, hasOriginRemote: false };
         }
 
-        const [defaultRef, worktreeList, remoteBranchResult, remoteNamesResult, branchLastCommit] =
-          branchMetadata;
+        const [
+          defaultRef,
+          worktreeList,
+          remoteBranchResult,
+          remoteNamesResult,
+          branchLastCommit,
+          branchUpstreamRemotes,
+        ] = branchMetadata;
 
         const remoteNames =
           remoteNamesResult.code === 0 ? parseRemoteNames(remoteNamesResult.stdout) : [];
@@ -3394,27 +3440,31 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           }
         }
 
-        const localBranches = localBranchResult.stdout
-          .split("\n")
-          .map(parseBranchLine)
-          .filter((branch): branch is { name: string; current: boolean } => branch !== null)
-          .map((branch) => ({
+        const unsortedLocalBranches: GitBranch[] = [];
+        for (const branch of localBranchResult.stdout.split("\n").map(parseBranchLine)) {
+          if (branch === null) {
+            continue;
+          }
+          const upstreamRemote = branchUpstreamRemotes.get(branch.name);
+          unsortedLocalBranches.push({
             name: branch.name,
             current: branch.current,
             isRemote: false,
+            ...(upstreamRemote ? { upstreamRemote } : {}),
             isDefault: branch.name === defaultBranch,
             worktreePath: worktreeMap.get(branch.name) ?? null,
-          }))
-          .toSorted((a, b) => {
-            const aPriority = a.current ? 0 : a.isDefault ? 1 : 2;
-            const bPriority = b.current ? 0 : b.isDefault ? 1 : 2;
-            if (aPriority !== bPriority) return aPriority - bPriority;
-
-            const aLastCommit = branchLastCommit.get(a.name) ?? 0;
-            const bLastCommit = branchLastCommit.get(b.name) ?? 0;
-            if (aLastCommit !== bLastCommit) return bLastCommit - aLastCommit;
-            return a.name.localeCompare(b.name);
           });
+        }
+        const localBranches = unsortedLocalBranches.toSorted((a, b) => {
+          const aPriority = a.current ? 0 : a.isDefault ? 1 : 2;
+          const bPriority = b.current ? 0 : b.isDefault ? 1 : 2;
+          if (aPriority !== bPriority) return aPriority - bPriority;
+
+          const aLastCommit = branchLastCommit.get(a.name) ?? 0;
+          const bLastCommit = branchLastCommit.get(b.name) ?? 0;
+          if (aLastCommit !== bLastCommit) return bLastCommit - aLastCommit;
+          return a.name.localeCompare(b.name);
+        });
 
         const remoteBranches =
           remoteBranchResult.code === 0
@@ -3453,7 +3503,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         const branches = [...localBranches, ...remoteBranches];
 
-        return { branches, isRepo: true, hasOriginRemote: remoteNames.includes("origin") };
+        return {
+          branches,
+          isRepo: true,
+          hasOriginRemote: remoteNames.includes("origin"),
+          remoteNames,
+        };
       });
 
     const listRecentCommits: GitCoreShape["listRecentCommits"] = (input) =>
@@ -4766,6 +4821,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       assertUsableRefName,
       checkoutBranch,
       deleteBranch,
+      readActionStatus,
       resolvePushRemoteName,
       createGitCommandError,
       parseDirtyWorktreeFiles,
