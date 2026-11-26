@@ -14,7 +14,7 @@ export const GIT_GRAPH_LANE_WIDTH = 12;
  * message readable.
  */
 export const GIT_GRAPH_MIN_LANE_CAP = 6;
-export const GIT_GRAPH_MAX_LANE_CAP = 24;
+export const GIT_GRAPH_MAX_LANE_CAP = 32;
 /** Share of the pane the gutter may take before the message column starves. */
 const GIT_GRAPH_GUTTER_WIDTH_RATIO = 0.35;
 

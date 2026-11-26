@@ -229,22 +229,22 @@ describe("GitHistoryPanel", () => {
   });
 
   it("keeps drawing lanes when the history is deeper than the pane's cap", async () => {
-    // Thirty lanes on one row exceed the twenty-four-column cap of this viewport. The row
-    // clips to the cap and keeps drawing lanes; it does not turn the list into one rail.
-    // The parents are loaded, so each really needs a lane.
-    const parentNames = Array.from({ length: 30 }, (_value, index) => `q${index}`);
+    // Forty lanes on one row exceed the cap of any pane width. The row clips to the cap
+    // and keeps drawing lanes; it does not turn the list into one rail. The parents are
+    // loaded, so each really needs a lane.
+    const parentNames = Array.from({ length: 40 }, (_value, index) => `q${index}`);
     harness.listCommitHistory.mockResolvedValue({
       commits: [
         {
           ...commit,
           sha: "1".repeat(40),
           subject: "deep row",
-          parents: parentNames.map((name) => name.padEnd(40, "0")),
+          parents: parentNames.map((name) => name.padEnd(40, "x")),
           refs: [],
         },
         ...parentNames.map((name) => ({
           ...commit,
-          sha: name.padEnd(40, "0"),
+          sha: name.padEnd(40, "x"),
           subject: name,
           parents: [],
           refs: [],
@@ -256,9 +256,11 @@ describe("GitHistoryPanel", () => {
 
     const row = page.getByTitle("deep row");
     await expect.element(row).toBeVisible();
-    // Capped at the pane's twenty-four columns, not flattened into one rail.
-    expect(row.element().querySelector("svg")?.getAttribute("width")).toBe("288");
-    // Several lanes are drawn: a rail would draw a single path.
+    // Capped below the forty lanes the row needs, but still a multi-lane graph: a rail
+    // would draw a single twelve-pixel column with one path.
+    const width = Number(row.element().querySelector("svg")?.getAttribute("width"));
+    expect(width).toBeGreaterThan(12);
+    expect(width).toBeLessThan(40 * 12);
     expect(row.element().querySelectorAll("path").length).toBeGreaterThan(1);
     await expect.element(page.getByText(/parallel branches/)).toBeVisible();
     await screen.unmount();
@@ -289,6 +291,43 @@ describe("GitHistoryPanel", () => {
     expect(
       page.getByTitle("loaded root").element().querySelectorAll("path[stroke-dasharray]").length,
     ).toBe(0);
+    await screen.unmount();
+  });
+
+  it("marks a commit whose lane is outside the drawn window", async () => {
+    // Forty loaded parents open forty lanes, past the cap of any pane width. The rows in
+    // the deepest lanes have no drawn column, so their marker is a hollow outline rather
+    // than a lane-coloured dot; lane 0 still has its own column.
+    const parentNames = Array.from({ length: 40 }, (_value, index) => `w${index}`);
+    harness.listCommitHistory.mockResolvedValue({
+      commits: [
+        {
+          ...commit,
+          sha: "1".repeat(40),
+          subject: "wide row",
+          parents: parentNames.map((name) => name.padEnd(40, "x")),
+          refs: [],
+        },
+        ...parentNames.map((name) => ({
+          ...commit,
+          sha: name.padEnd(40, "x"),
+          subject: name,
+          parents: [],
+          refs: [],
+        })),
+      ],
+      hasMore: false,
+    });
+    const screen = await mount();
+
+    const markerOf = (subject: string) => {
+      const circle = page.getByTitle(subject, { exact: true }).element().querySelector("circle");
+      return { fill: circle?.getAttribute("fill"), stroke: circle?.getAttribute("stroke") };
+    };
+    await expect.element(page.getByTitle("w39", { exact: true })).toBeVisible();
+    expect(markerOf("w0").fill).toContain("var(--color-git-lane-");
+    expect(markerOf("w38")).toEqual({ fill: "none", stroke: "var(--color-muted-foreground)" });
+    expect(markerOf("w39")).toEqual({ fill: "none", stroke: "var(--color-muted-foreground)" });
     await screen.unmount();
   });
 

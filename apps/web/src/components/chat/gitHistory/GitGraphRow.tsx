@@ -130,7 +130,8 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   const gutter = resolveGitGraphGutter(rowColumns, props.laneCap);
   const width = gutter.lanes * laneWidth;
   const mid = height / 2;
-  const commitColumn = Math.min(row.lane, gutter.lanes - 1);
+  const laneOutside = row.lane >= gutter.lanes;
+  const commitColumn = laneOutside ? gutter.lanes - 1 : row.lane;
   const commitX = laneCenter(commitColumn, laneWidth);
   const laneFits = (lane: number) => lane < gutter.lanes;
   const color = gitGraphLaneColor(row.lane);
@@ -161,7 +162,7 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
         {row.continuesBelow && props.pendingParentTitle ? (
           <title>{props.pendingParentTitle}</title>
         ) : null}
-        {row.continuesFromAbove ? (
+        {row.continuesFromAbove && !laneOutside ? (
           <path
             d={`M ${commitX} 0 L ${commitX} ${mid}`}
             stroke={color}
@@ -214,10 +215,13 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
         <circle
           cx={commitX}
           cy={mid}
-          r={isCheckedOut ? 4.6 : 3.4}
-          fill={isCheckedOut ? "var(--color-background)" : color}
-          stroke={isCheckedOut ? color : "none"}
-          strokeWidth={isCheckedOut ? 2 : 0}
+          r={laneOutside ? 3 : isCheckedOut ? 4.6 : 3.4}
+          // A commit whose lane is outside the drawn window has no real column here, so
+          // its marker is a hollow outline: a filled dot in a lane color would read as a
+          // lane this commit does not belong to.
+          fill={laneOutside ? "none" : isCheckedOut ? "var(--color-background)" : color}
+          stroke={laneOutside ? "var(--color-muted-foreground)" : isCheckedOut ? color : "none"}
+          strokeWidth={laneOutside ? 1.5 : isCheckedOut ? 2 : 0}
         />
       </svg>
       <CommitRowSummary
