@@ -103,8 +103,10 @@ function CommitRowSummary(props: {
 export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   commit: GitHistoryCommit;
   row: GitGraphRow;
-  /** Lanes this pane can draw; a row past it collapses to one rail. */
+  /** Lanes this pane can draw. */
   laneCap: number;
+  /** True when the history needs a rail everywhere, so every row draws the same shape. */
+  collapsed: boolean;
   selected: boolean;
   onSelect: (sha: string) => void;
   authorLabel: string;
@@ -125,7 +127,7 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   // content starts right after them. Lanes keep their column for life, so every line
   // stays vertical.
   const rowColumns = Math.max(row.topColumns, row.bottomColumns, 1);
-  const gutter = resolveGitGraphGutter(rowColumns, props.laneCap);
+  const gutter = resolveGitGraphGutter(rowColumns, props.collapsed ? 0 : props.laneCap);
   const width = gutter.lanes * laneWidth;
   const mid = height / 2;
   const commitColumn = gutter.collapsed ? 0 : row.lane;

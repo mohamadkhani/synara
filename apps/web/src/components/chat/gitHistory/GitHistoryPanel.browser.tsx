@@ -288,6 +288,28 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
+  it("draws the rail on every row when the history is too branchy for the pane", async () => {
+    // Twenty lanes on one row push the whole list past the pane's eighteen-column cap,
+    // so the shallow rows below are rails too: a list that mixes rails and lane graphs
+    // reads as broken.
+    const parents = Array.from({ length: 20 }, (_value, index) => `q${index}`.padEnd(40, "0"));
+    harness.listCommitHistory.mockResolvedValue({
+      commits: [
+        { ...commit, sha: "1".repeat(40), subject: "wide row", parents, refs: [] },
+        { ...commit, sha: "2".repeat(40), subject: "narrow row", parents: [], refs: [] },
+      ],
+      hasMore: false,
+    });
+    const screen = await mount();
+
+    const widthOf = (title: string) =>
+      page.getByTitle(title).element().querySelector("svg")?.getAttribute("width");
+    await expect.element(page.getByTitle("wide row")).toBeVisible();
+    expect(widthOf("wide row")).toBe("12");
+    expect(widthOf("narrow row")).toBe("12");
+    await screen.unmount();
+  });
+
   it("groups remote branches by namespace and filters them by name", async () => {
     harness.listBranches.mockResolvedValue({
       branches: [
