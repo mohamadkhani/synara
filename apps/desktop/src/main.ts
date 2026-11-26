@@ -86,6 +86,7 @@ import {
   type UpdateDownloadedEvent,
 } from "electron-updater";
 
+import { resolveContextMenuPopupPosition } from "./contextMenuPosition";
 import { buildContextMenuTemplate } from "./contextMenuTemplate";
 import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
@@ -5522,18 +5523,10 @@ function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC.contextMenu);
   ipcMain.handle(
     IPC.contextMenu,
-    async (_event, items: unknown, position?: { x: number; y: number }) => {
-      const popupPosition =
-        position &&
-        Number.isFinite(position.x) &&
-        Number.isFinite(position.y) &&
-        position.x >= 0 &&
-        position.y >= 0
-          ? {
-              x: Math.floor(position.x),
-              y: Math.floor(position.y),
-            }
-          : null;
+    async (event, items: unknown, position?: { x: number; y: number }) => {
+      // The renderer reports CSS pixels; the native menu positions in window DIPs, so the
+      // page zoom factor must be applied or the menu drifts from the pointer when zoomed.
+      const popupPosition = resolveContextMenuPopupPosition(position, event.sender.getZoomFactor());
 
       const window = BrowserWindow.getFocusedWindow() ?? mainWindow;
       if (!window) return null;
