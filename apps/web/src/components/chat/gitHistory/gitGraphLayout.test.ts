@@ -242,6 +242,23 @@ describe("layoutGitGraph", () => {
    * Adapted from the incoming/outgoing case: the pseudo-nodes are not modelled here, so
    * this is the underlying commit walk.
    */
+  it("reports the lanes still open at the last row for the continuation row", () => {
+    // The panel draws `rows.at(-1).outputLanes` under the list while more history can load.
+    // A tip whose parent sits in the next page keeps a lane open, so the graph continues.
+    const layout = layoutGitGraph([commit("a", ["b"]), commit("b", ["unloaded"])]);
+
+    const last = layout.rows.at(-1)!;
+    expect(last.outputLanes.map((entry) => entry.id)).toEqual(["unloaded"]);
+    expect(last.continuesBelow).toBe(true);
+  });
+
+  it("frees lanes whose parent is outside the loaded commits", () => {
+    // Commits whose parents sit in an unloaded page still open a lane for them, so the graph
+    // continues past the last row instead of ending.
+    const layout = layoutGitGraph([commit("z", ["below"])]);
+    expect(layout.rows[0]!.outputLanes.map((entry) => entry.id)).toEqual(["below"]);
+  });
+
   it("walk with an unloaded interleaved tip", () => {
     const layout = layoutGitGraph([
       commit("a", ["b"]),

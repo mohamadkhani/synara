@@ -408,8 +408,8 @@ export function GitHistoryPanel(props: {
     selectedBranches.some((name, index) => name !== defaultBranchSelection[index]);
 
   // While more history can be loaded, a placeholder row after the last visible commit
-  // draws the lanes still open there, faded out, so the graph reads as continuing. A text
-  // filter hides the graph, so the placeholder is hidden with it.
+  // draws the lanes still open there, so the graph reads as continuing. A text filter hides
+  // the graph, so the placeholder is hidden with it.
   const continuationLanes = useMemo(() => {
     if (!historyQuery.hasNextPage || isSearching) return [];
     const last = visibleCommits[visibleCommits.length - 1];
@@ -441,7 +441,7 @@ export function GitHistoryPanel(props: {
       ...visibleCommits.map((commit) => ({ kind: "commit" as const, commit })),
       ...(continuationLanes.length > 0 ? [{ kind: "continuation" as const }] : []),
     ];
-  }, [continuationLanes.length, isSearching, stagedStats, stashes, unstagedStats, visibleCommits]);
+  }, [continuationLanes, isSearching, stagedStats, stashes, unstagedStats, visibleCommits]);
 
   const virtualizer = useVirtualizer({
     count: entries.length,
@@ -455,6 +455,10 @@ export function GitHistoryPanel(props: {
   // window is the rows at the current scroll offset; a minimum of eight rows keeps the
   // promotion useful in a short pane. What the graph walks is unchanged: this only reorders
   // chips, so nothing refetches and the width does not grow.
+  //
+  // These virtualizer reads stay *after* the `entries` memo on purpose: reading them first
+  // made React Compiler invalidate that memo inside the render, so `entries` could recompute
+  // with a stale `continuationLanes` and the boundary row drew the wrong lane set.
   const scrollOffset = virtualizer.scrollOffset ?? 0;
   const visibleRowCount = Math.max(
     8,
