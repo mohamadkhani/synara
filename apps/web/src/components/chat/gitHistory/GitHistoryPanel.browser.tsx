@@ -319,7 +319,7 @@ describe("GitHistoryPanel", () => {
   it("keeps every lane clear of the list's scrollbar and of its right edge", async () => {
     // Many lanes and enough rows to overflow: the vertical scrollbar is on screen, and a
     // pane-sized row used to run underneath it, chopping the right-hand lanes. The graph
-    // column is a fixed, capped width now, and its SVG stops 8px past the last lane.
+    // column is a fixed, capped width now, and the svg ends flush with its last lane.
     const parentNames = Array.from({ length: 40 }, (_value, index) => `w${index}`);
     harness.listCommitHistory.mockResolvedValue({
       commits: [
@@ -355,15 +355,13 @@ describe("GitHistoryPanel", () => {
     expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
 
     const svg = row.element().querySelector("svg")!;
-    const svgRight = svg.getBoundingClientRect().right;
     const scrollerRight = scroller.getBoundingClientRect().right;
     const scrollbarWidth = scroller.offsetWidth - scroller.clientWidth;
-    const lastLaneCenter = 39 * GIT_GRAPH_LANE_WIDTH + GIT_GRAPH_LANE_WIDTH / 2;
-    expect(svg.getBoundingClientRect().left + lastLaneCenter).toBeLessThan(
-      svgRight - GIT_GRAPH_LANE_WIDTH,
-    );
-    // The widest row ends at least one scrollbar's width before the list's edge.
-    expect(svgRight).toBeLessThanOrEqual(scrollerRight - scrollbarWidth + 1);
+    const lastLaneX =
+      svg.getBoundingClientRect().left + 39 * GIT_GRAPH_LANE_WIDTH + GIT_GRAPH_LANE_WIDTH;
+    // Every lane, including the last, is left of where the scrollbar starts.
+    expect(lastLaneX).toBeLessThanOrEqual(scrollerRight - scrollbarWidth);
+    expect(svg.getBoundingClientRect().right).toBeLessThanOrEqual(scrollerRight);
     await screen.unmount();
   });
 
@@ -395,8 +393,8 @@ describe("GitHistoryPanel", () => {
     const row = page.getByTitle("deep row");
     await expect.element(row).toBeVisible();
     const svg = row.element().querySelector("svg");
-    // Every lane plus the inset that keeps the last lane off the row's edge.
-    expect(Number(svg?.getAttribute("width"))).toBe(40 * GIT_GRAPH_LANE_WIDTH + 8);
+    // The svg holds exactly the lanes; the row adds the gutter after it.
+    expect(Number(svg?.getAttribute("width"))).toBe(40 * GIT_GRAPH_LANE_WIDTH);
     expect(row.element().querySelectorAll("path").length).toBe(40);
     expect(row.element().querySelector("circle")?.getAttribute("fill")).toContain(
       "var(--color-git-lane-",

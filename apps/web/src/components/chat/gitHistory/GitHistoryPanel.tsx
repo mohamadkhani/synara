@@ -64,7 +64,7 @@ import { GitHistoryToolbar, type GitWorktreeOption } from "./GitHistoryToolbar";
 import { branchColorsFromLayout } from "./gitBranchColors";
 import { GIT_HISTORY_BRANCH_BUDGET, computeDefaultBranchSelection } from "./gitHistorySelection";
 import { useGitHistoryBranchSelection } from "./useGitHistoryBranchSelection";
-import { GIT_GRAPH_ROW_HEIGHT, layoutGitGraph } from "./gitGraphLayout";
+import { GIT_GRAPH_ROW_HEIGHT, layoutGitGraph, type GitGraphLane } from "./gitGraphLayout";
 
 type GitHistorySelection =
   | { kind: "commit"; sha: string }
@@ -410,10 +410,21 @@ export function GitHistoryPanel(props: {
   // While more history can be loaded, a placeholder row after the last visible commit
   // draws the lanes still open there, so the graph reads as continuing. A text filter hides
   // the graph, so the placeholder is hidden with it.
+  // The continuation row repeats the last row's columns so the lanes look like they carry on.
+  // Counting `inputLanes` (every column the row drew above the dot) is what lines up with the
+  // row above: `outputLanes` can be shorter, because a lane that converges into the dot is
+  // no longer "leaving" but its column is still on screen until the row ends.
   const continuationLanes = useMemo(() => {
     if (!historyQuery.hasNextPage || isSearching) return [];
     const last = visibleCommits[visibleCommits.length - 1];
-    return last ? (rowBySha.get(last.sha)?.outputLanes ?? []) : [];
+    const row = last ? rowBySha.get(last.sha) : undefined;
+    if (!row) return [];
+    const lanes: GitGraphLane[] = [];
+    for (let index = 0; index < Math.max(row.laneCount, 1); index += 1) {
+      const open = row.inputLanes[index] ?? row.outputLanes[index];
+      if (open) lanes.push(open);
+    }
+    return lanes;
   }, [historyQuery.hasNextPage, isSearching, rowBySha, visibleCommits]);
 
   // One flat list so the virtualizer can place the pseudo-commit rows and the real

@@ -19,12 +19,10 @@ import {
   type GitGraphRow,
 } from "./gitGraphLayout";
 
-/** Slack a row keeps to the right of its own lanes, so a lane can never touch the edge. */
-const GIT_GRAPH_LANE_INSET = 8;
-
 /**
- * Free space a row lets the scrollbar cover: the graph column is a fixed, capped width, so
- * nothing meaningful sits under it and a scrollbar appearing mid-session cannot chop a lane.
+ * Free space a row keeps after its last lane. The svg ends flush with the last lane at
+ * `laneCount * laneWidth`; this gutter is added after it, so a lane never sits under the
+ * list's scrollbar or against the row's rounded right edge.
  */
 export const GIT_GRAPH_SCROLLBAR_GUTTER = 16;
 
@@ -38,15 +36,17 @@ export const GIT_GRAPH_COLUMN_LANE_LIMIT = 24;
 
 /** Width of the graph SVG for a row that draws `laneCount` columns. */
 export function gitGraphSvgWidth(laneCount: number): number {
-  return Math.max(1, laneCount) * GIT_GRAPH_LANE_WIDTH + GIT_GRAPH_LANE_INSET;
+  return Math.max(1, laneCount) * GIT_GRAPH_LANE_WIDTH + GIT_GRAPH_SCROLLBAR_GUTTER;
+}
+
+/** Width of the svg alone: flush with the last lane, so `laneCount * laneWidth`. */
+export function gitGraphLaneWidth(laneCount: number): number {
+  return Math.max(1, laneCount) * GIT_GRAPH_LANE_WIDTH;
 }
 
 /** Width of the graph column for a whole layout: the widest row, up to the column cap. */
 export function gitGraphColumnWidth(layout: { readonly laneCount: number }): number {
-  return (
-    Math.min(Math.max(1, layout.laneCount), GIT_GRAPH_COLUMN_LANE_LIMIT) * GIT_GRAPH_LANE_WIDTH +
-    GIT_GRAPH_LANE_INSET
-  );
+  return gitGraphSvgWidth(Math.min(Math.max(1, layout.laneCount), GIT_GRAPH_COLUMN_LANE_LIMIT));
 }
 
 function laneCenter(lane: number, laneWidth: number): number {
@@ -146,7 +146,8 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   // width for every row — so a scrollbar appearing mid-session never re-measures the list;
   // with fewer lanes than the column the SVG still fills it, with more it is wider and the
   // list scrolls sideways.
-  const width = Math.max(props.columnWidth ?? 0, gitGraphSvgWidth(row.laneCount));
+  const width = gitGraphSvgWidth(row.laneCount);
+  const laneCountWidth = gitGraphLaneWidth(row.laneCount);
   const mid = height / 2;
   const commitX = laneCenter(row.lane, laneWidth);
   const color = gitGraphLaneColor(row.color);
@@ -168,9 +169,9 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
       )}
     >
       <svg
-        width={width}
+        width={laneCountWidth}
         height={height}
-        viewBox={`0 0 ${width} ${height}`}
+        viewBox={`0 0 ${laneCountWidth} ${height}`}
         className="shrink-0"
         aria-hidden="true"
       >
@@ -260,7 +261,8 @@ export const GitGraphContinuationRow = memo(function GitGraphContinuationRow(pro
 }) {
   const height = GIT_GRAPH_ROW_HEIGHT;
   const laneWidth = GIT_GRAPH_LANE_WIDTH;
-  const width = Math.max(props.columnWidth ?? 0, gitGraphSvgWidth(props.lanes.length));
+  const laneCountWidth = gitGraphLaneWidth(props.lanes.length);
+  const width = gitGraphSvgWidth(props.lanes.length);
   return (
     <div
       aria-hidden="true"
@@ -268,7 +270,12 @@ export const GitGraphContinuationRow = memo(function GitGraphContinuationRow(pro
       className="shrink-0"
       style={{ height, width }}
     >
-      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
+      <svg
+        width={laneCountWidth}
+        height={height}
+        viewBox={`0 0 ${laneCountWidth} ${height}`}
+        aria-hidden="true"
+      >
         {props.lanes.map((lane, index) => (
           <path
             key={`${lane.id}-${index}`}
