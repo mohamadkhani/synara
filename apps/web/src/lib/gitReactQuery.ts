@@ -699,6 +699,10 @@ export function gitCommitHistoryQueryOptions(input: {
         ? allPages.reduce((total, page) => total + page.commits.length, 0)
         : undefined,
     enabled: (input.enabled ?? true) && input.cwd !== null,
+    // A selection change starts a new walk under a new cache key. Keeping the previous pages
+    // rendered while the new one loads stops the list from collapsing for a moment, which
+    // would throw the reader's scroll position back to the newest commit.
+    placeholderData: (previous) => previous,
     // History only moves when this client commits, fetches, or an agent does; the
     // git invalidation pipeline covers those, so no polling is needed here.
     staleTime: GIT_BRANCHES_STALE_TIME_MS,

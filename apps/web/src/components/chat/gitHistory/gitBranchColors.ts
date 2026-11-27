@@ -1,10 +1,10 @@
 // FILE: gitBranchColors.ts
-// Purpose: The one lane colour palette, shared by the graph, the branch chips, and the
-//          per-row strips. Colour is a property of a branch, not of a column, so a
-//          branch keeps one hue wherever it appears.
+// Purpose: The one lane colour palette, shared by the graph and the branch chips.
+//          A chip's colour is read from the lane its commit actually draws, so a chip and
+//          its line in the graph can never disagree.
 // Layer: Git history UI helper
 // Exports: GIT_GRAPH_LANE_COLOR_COUNT, GIT_GRAPH_LANE_COLORS, gitGraphLaneColor,
-//          assignGitBranchColors
+//          branchColorsFromLayout
 
 /**
  * Saturated, mid-lightness hues so lanes stay legible on both the light and dark
@@ -34,38 +34,32 @@ export function gitGraphLaneColor(colorIndex: number): string {
   ]!;
 }
 
+export interface ColoredRefCommit {
+  readonly sha: string;
+  readonly refs: ReadonlyArray<{ readonly name: string; readonly kind: string }>;
+}
+
 /**
- * One colour per branch, distinct across the selected branches.
+ * One colour per ref, taken from the lane its commit occupies in the laid-out graph.
  *
- * A branch is anchored at its position in `candidates` (the canonical candidate order),
- * so an unselected chip previews the colour it will keep once it is turned on. When two
- * selected branches land on the same palette slot, the later one probes forward to the
- * next free colour, which is why the selected set stays distinct even when its branches
- * are more than ten candidates apart. The budget (8) is below the palette size (10), so
- * the probe finds a free slot whenever the selection is valid.
+ * A ref is decorated onto exactly one commit (its tip), and the layout colours that commit's
+ * lane; reusing it means the chip and the line in the graph always agree. Only branch and
+ * remote decorations count: `head` names the pseudo-ref "HEAD" and a tag is not a branch.
+ * The first commit that carries a ref wins, so a stale duplicate cannot repaint it.
  */
-export function assignGitBranchColors(
-  selected: readonly string[],
-  candidates: readonly string[],
+export function branchColorsFromLayout(
+  commits: ReadonlyArray<ColoredRefCommit>,
+  colorBySha: ReadonlyMap<string, number>,
 ): ReadonlyMap<string, string> {
-  const selectedSet = new Set(selected);
-  const usedSlots = new Set<number>();
-  const colorByBranch = new Map<string, string>();
-
-  candidates.forEach((branch, index) => {
-    if (!selectedSet.has(branch)) {
-      colorByBranch.set(branch, gitGraphLaneColor(index));
-      return;
+  const colorByRef = new Map<string, string>();
+  for (const commit of commits) {
+    const colorIndex = colorBySha.get(commit.sha);
+    if (colorIndex === undefined) continue;
+    for (const ref of commit.refs) {
+      if (ref.kind !== "branch" && ref.kind !== "remote") continue;
+      if (colorByRef.has(ref.name)) continue;
+      colorByRef.set(ref.name, gitGraphLaneColor(colorIndex));
     }
-    let slot = index % GIT_GRAPH_LANE_COLOR_COUNT;
-    let probes = 0;
-    while (usedSlots.has(slot) && probes < GIT_GRAPH_LANE_COLOR_COUNT) {
-      slot = (slot + 1) % GIT_GRAPH_LANE_COLOR_COUNT;
-      probes += 1;
-    }
-    usedSlots.add(slot);
-    colorByBranch.set(branch, gitGraphLaneColor(slot));
-  });
-
-  return colorByBranch;
+  }
+  return colorByRef;
 }

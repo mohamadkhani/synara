@@ -28,7 +28,6 @@ import {
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { basenameOfPath } from "~/file-icons";
 import { serverWorktreesQueryOptions } from "~/lib/serverReactQuery";
-import { useContainerSize } from "~/hooks/useContainerSize";
 import { useStore } from "~/store";
 import { createWorktreePathOwnershipSelector } from "~/storeSelectors";
 import { readNativeApi } from "~/nativeApi";
@@ -52,13 +51,20 @@ import { GitDeleteRefDialog, type GitDeleteRefKind } from "./GitDeleteRefDialog"
 import { GitDeleteStashDialog } from "./GitDeleteStashDialog";
 import { GitStashDialog, type GitStashScope } from "./GitStashDialog";
 import { useGitCommitActions } from "./useGitCommitActions";
-import { GitCommitFlatRow, GitGraphCommitRow, GitStashRow, GitWorkingTreeRow } from "./GitGraphRow";
+import {
+  GitCommitFlatRow,
+  GitGraphCommitRow,
+  GitGraphContinuationRow,
+  GitStashRow,
+  GitWorkingTreeRow,
+  gitGraphColumnWidth,
+} from "./GitGraphRow";
 import { GitWorkingTreeDetail } from "./GitWorkingTreeDetail";
 import { GitHistoryToolbar, type GitWorktreeOption } from "./GitHistoryToolbar";
-import { assignGitBranchColors } from "./gitBranchColors";
-import { GIT_HISTORY_BRANCH_BUDGET } from "./gitHistorySelection";
+import { branchColorsFromLayout } from "./gitBranchColors";
+import { GIT_HISTORY_BRANCH_BUDGET, computeDefaultBranchSelection } from "./gitHistorySelection";
 import { useGitHistoryBranchSelection } from "./useGitHistoryBranchSelection";
-import { GIT_GRAPH_ROW_HEIGHT, layoutGitGraph, resolveGitGraphLaneCap } from "./gitGraphLayout";
+import { GIT_GRAPH_ROW_HEIGHT, layoutGitGraph } from "./gitGraphLayout";
 
 type GitHistorySelection =
   | { kind: "commit"; sha: string }
@@ -68,7 +74,8 @@ type GitHistorySelection =
 type GitHistoryEntry =
   | { kind: "workingTree"; scope: "staged" | "unstaged" }
   | { kind: "stash"; stash: GitStashEntry }
-  | { kind: "commit"; commit: GitHistoryCommit };
+  | { kind: "commit"; commit: GitHistoryCommit }
+  | { kind: "continuation" };
 
 export function GitHistoryPanel(props: {
   /** The thread's own checkout: the worktree this task runs in. */
@@ -81,7 +88,6 @@ export function GitHistoryPanel(props: {
   const { t } = useTranslation();
   const { settings } = useAppSettings();
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null);
   const [search, setSearch] = useState("");
   const [selection, setSelection] = useState<GitHistorySelection | null>(null);
   // The pane can browse any worktree of the same repository. It follows the
@@ -252,10 +258,6 @@ export function GitHistoryPanel(props: {
     defaultBranch,
   });
   const selectedBranches = branchSelection.selected;
-  const branchColors = useMemo(
-    () => assignGitBranchColors(selectedBranches, candidateNames),
-    [candidateNames, selectedBranches],
-  );
 
   const worktreeEntries = useMemo(() => {
     const branchByPath = new Map<string, string>();
@@ -353,13 +355,12 @@ export function GitHistoryPanel(props: {
     () => layoutGitGraph(commits.map((commit) => ({ sha: commit.sha, parents: commit.parents }))),
     [commits],
   );
-  // The gutter width follows the pane, so widening the sidebar reveals more lanes and a
-  // narrow pane keeps the message readable. Past the cap the graph collapses to one rail
-  // rather than flattening deep lanes onto the last column.
-  const rootSize = useContainerSize(rootElement);
-  const laneCap = resolveGitGraphLaneCap(rootSize?.width ?? 0);
-  // Only the rows that need more lanes than the pane can draw leave lanes out.
-  const graphClipped = layout.laneCount > laneCap;
+
+  // One width for the graph column of every row (commit, stash, working tree,
+  // continuation). A fixed column instead of a pane-width row means the list never
+  // re-measures when a scrollbar appears, and the commit text never has to share the row
+  // with a scrollbar.
+  const graphColumnWidthValue = gitGraphColumnWidth(layout);
 
   const normalizedSearch = deferredSearch.trim().toLowerCase();
   const isSearching = normalizedSearch.length > 0;
@@ -378,6 +379,42 @@ export function GitHistoryPanel(props: {
     for (const row of layout.rows) map.set(row.sha, row);
     return map;
   }, [layout.rows]);
+
+  // A chip's colour comes from the lane its commit actually draws, so the chip and the line
+  // in the graph can never disagree. Reading it from the whole walk (not only the visible
+  // rows) keeps a branch's colour stable while it is scrolled out of view.
+  const branchColors = useMemo(
+    () =>
+      branchColorsFromLayout(
+        commits,
+        new Map(layout.rows.map((row) => [row.sha, row.color] as const)),
+      ),
+    [commits, layout.rows],
+  );
+
+  // The smart default the reset button restores: the current branch and its upstream.
+  const defaultBranchSelection = useMemo(
+    () =>
+      computeDefaultBranchSelection({
+        candidates: candidateNames,
+        currentBranch,
+        upstreamBranch,
+        defaultBranch,
+      }),
+    [candidateNames, currentBranch, defaultBranch, upstreamBranch],
+  );
+  const canResetBranches =
+    selectedBranches.length !== defaultBranchSelection.length ||
+    selectedBranches.some((name, index) => name !== defaultBranchSelection[index]);
+
+  // While more history can be loaded, a placeholder row after the last visible commit
+  // draws the lanes still open there, faded out, so the graph reads as continuing. A text
+  // filter hides the graph, so the placeholder is hidden with it.
+  const continuationLanes = useMemo(() => {
+    if (!historyQuery.hasNextPage || isSearching) return [];
+    const last = visibleCommits[visibleCommits.length - 1];
+    return last ? (rowBySha.get(last.sha)?.outputLanes ?? []) : [];
+  }, [historyQuery.hasNextPage, isSearching, rowBySha, visibleCommits]);
 
   // One flat list so the virtualizer can place the pseudo-commit rows and the real
   // history on the same fixed row height. A text filter hides the working tree rows,
@@ -402,8 +439,9 @@ export function GitHistoryPanel(props: {
       ...workingTreeEntries,
       ...stashEntries,
       ...visibleCommits.map((commit) => ({ kind: "commit" as const, commit })),
+      ...(continuationLanes.length > 0 ? [{ kind: "continuation" as const }] : []),
     ];
-  }, [isSearching, stagedStats, stashes, unstagedStats, visibleCommits]);
+  }, [continuationLanes.length, isSearching, stagedStats, stashes, unstagedStats, visibleCommits]);
 
   const virtualizer = useVirtualizer({
     count: entries.length,
@@ -412,6 +450,35 @@ export function GitHistoryPanel(props: {
     overscan: 16,
     initialRect: { height: 320, width: 0 },
   });
+
+  // The chip bar keeps the branches whose tip is in the graph's viewport at its head. The
+  // window is the rows at the current scroll offset; a minimum of eight rows keeps the
+  // promotion useful in a short pane. What the graph walks is unchanged: this only reorders
+  // chips, so nothing refetches and the width does not grow.
+  const scrollOffset = virtualizer.scrollOffset ?? 0;
+  const visibleRowCount = Math.max(
+    8,
+    Math.ceil((virtualizer.scrollRect?.height ?? 0) / GIT_GRAPH_ROW_HEIGHT),
+  );
+  const firstVisibleRow = Math.floor(scrollOffset / GIT_GRAPH_ROW_HEIGHT);
+  const visibleBranchKey = useMemo(() => {
+    const names: string[] = [];
+    for (let index = firstVisibleRow; index < firstVisibleRow + visibleRowCount; index += 1) {
+      const entry = entries[index];
+      if (!entry || entry.kind !== "commit") continue;
+      for (const ref of entry.commit.refs) {
+        if (ref.kind !== "branch" && ref.kind !== "remote") continue;
+        if (!names.includes(ref.name)) names.push(ref.name);
+      }
+    }
+    return names.join("\u0000");
+  }, [entries, firstVisibleRow, visibleRowCount]);
+  // NUL is not valid in a ref name, so the join/split round-trips exactly. Keying the array
+  // on the joined string keeps its identity stable while the visible set is unchanged.
+  const visibleBranches = useMemo(
+    () => (visibleBranchKey ? visibleBranchKey.split("\u0000") : []),
+    [visibleBranchKey],
+  );
 
   const selectedCommit = selectedSha
     ? (commits.find((commit) => commit.sha === selectedSha) ?? null)
@@ -719,7 +786,7 @@ export function GitHistoryPanel(props: {
   const refreshing = historyQuery.isFetching && !historyQuery.isFetchingNextPage;
 
   return (
-    <div ref={setRootElement} className={cn("flex min-h-0 min-w-0 flex-col", props.className)}>
+    <div className={cn("flex min-h-0 min-w-0 flex-col", props.className)}>
       <GitHistoryToolbar
         worktrees={worktreeOptions}
         worktreePath={viewCwd ?? ""}
@@ -740,6 +807,9 @@ export function GitHistoryPanel(props: {
         onShowOnlyBranch={branchSelection.showOnly}
         onHideRestBranches={branchSelection.hideRest}
         onShowAllBranches={branchSelection.showAll}
+        visibleBranches={visibleBranches}
+        canResetBranches={canResetBranches}
+        onResetBranches={branchSelection.reset}
         showRemoteBranches={showRemoteBranches}
         onShowRemoteBranchesChange={setShowRemoteBranches}
         search={search}
@@ -758,19 +828,15 @@ export function GitHistoryPanel(props: {
         </Alert>
       ) : null}
 
-      {graphClipped ? (
-        <p className="shrink-0 px-1.5 pb-1 text-ui-xs text-muted-foreground">
-          {t("git:historyGraphSimplified", {
-            value0: laneCap,
-            value1: layout.laneCount,
-          })}
-        </p>
-      ) : null}
-
       <div
         ref={scrollRef}
+        data-git-history-scroll=""
         className={cn(
-          "min-h-0 overflow-y-auto overflow-x-hidden px-1.5",
+          // The vertical scrollbar is reserved from the first paint in both axes, so a
+          // scrollbar appearing after the first page fits cannot change the list's height
+          // (which reset the scroll position) or its width (which re-measured the graph).
+          // The bottom gutter keeps the room for the graph's sideways scroll track.
+          "min-h-0 overflow-auto px-1.5 [scrollbar-gutter:stable]",
           selection === null ? "flex-1" : detailExpanded ? "hidden" : "h-[48%] shrink-0",
         )}
       >
@@ -800,7 +866,9 @@ export function GitHistoryPanel(props: {
                   ? entry.commit.sha
                   : entry.kind === "stash"
                     ? `stash:${entry.stash.sha}`
-                    : entry.scope;
+                    : entry.kind === "continuation"
+                      ? "continuation"
+                      : entry.scope;
               return (
                 <div
                   key={key}
@@ -810,6 +878,7 @@ export function GitHistoryPanel(props: {
                   {entry.kind === "stash" ? (
                     <GitStashRow
                       stash={entry.stash}
+                      columnWidth={graphColumnWidthValue}
                       selected={selectedStash === entry.stash.sha}
                       onSelect={(stash) => selectEntry({ kind: "stash", sha: stash.sha })}
                       onContextMenu={(event) => void showStashContextMenu(entry.stash, event)}
@@ -817,10 +886,9 @@ export function GitHistoryPanel(props: {
                   ) : entry.kind === "commit" ? (
                     renderCommitRow({
                       commit: entry.commit,
+                      columnWidth: graphColumnWidthValue,
                       isSearching,
                       row: rowBySha.get(entry.commit.sha),
-                      laneCap,
-                      pendingParentTitle: t("git:historyGraphContinuesBelow"),
                       remoteNames,
                       selection,
                       onSelect: selectEntry,
@@ -828,9 +896,15 @@ export function GitHistoryPanel(props: {
                       onRefContextMenu: showRefContextMenu,
                       onCommitContextMenu: showCommitContextMenu,
                     })
+                  ) : entry.kind === "continuation" ? (
+                    <GitGraphContinuationRow
+                      lanes={continuationLanes}
+                      columnWidth={graphColumnWidthValue}
+                    />
                   ) : (
                     renderWorkingTreeRow({
                       scope: entry.scope,
+                      columnWidth: graphColumnWidthValue,
                       stats: entry.scope === "staged" ? stagedStats : unstagedStats,
                       selection,
                       onSelect: selectEntry,
@@ -953,6 +1027,7 @@ export function GitHistoryPanel(props: {
 
 function renderWorkingTreeRow(input: {
   scope: "staged" | "unstaged";
+  columnWidth: number;
   stats: { additions: number; deletions: number; fileCount: number } | null;
   selection: GitHistorySelection | null;
   onSelect: (next: GitHistorySelection) => void;
@@ -960,6 +1035,7 @@ function renderWorkingTreeRow(input: {
 }) {
   return (
     <GitWorkingTreeRow
+      columnWidth={input.columnWidth}
       label={
         input.scope === "staged" ? t("git:historyStagedChanges") : t("git:historyUnstagedChanges")
       }
@@ -975,10 +1051,9 @@ function renderWorkingTreeRow(input: {
 
 function renderCommitRow(input: {
   commit: GitHistoryCommit;
+  columnWidth: number;
   isSearching: boolean;
   row: ReturnType<typeof layoutGitGraph>["rows"][number] | undefined;
-  laneCap: number;
-  pendingParentTitle: string;
   remoteNames: readonly string[];
   selection: GitHistorySelection | null;
   onSelect: (next: GitHistorySelection) => void;
@@ -992,6 +1067,7 @@ function renderCommitRow(input: {
   if (input.isSearching || input.row === undefined) {
     return (
       <GitCommitFlatRow
+        columnWidth={input.columnWidth}
         commit={input.commit}
         selected={input.selection?.kind === "commit" && input.selection.sha === input.commit.sha}
         onSelect={(sha) => input.onSelect({ kind: "commit", sha })}
@@ -1008,8 +1084,7 @@ function renderCommitRow(input: {
     <GitGraphCommitRow
       commit={input.commit}
       row={input.row}
-      laneCap={input.laneCap}
-      pendingParentTitle={input.pendingParentTitle}
+      columnWidth={input.columnWidth}
       selected={input.selection?.kind === "commit" && input.selection.sha === input.commit.sha}
       onSelect={(sha) => input.onSelect({ kind: "commit", sha })}
       authorLabel={input.commit.authorName}

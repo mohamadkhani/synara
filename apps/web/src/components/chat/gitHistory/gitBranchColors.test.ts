@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   GIT_GRAPH_LANE_COLOR_COUNT,
   GIT_GRAPH_LANE_COLORS,
-  assignGitBranchColors,
+  branchColorsFromLayout,
   gitGraphLaneColor,
+  type ColoredRefCommit,
 } from "./gitBranchColors";
 
 describe("gitBranchColors", () => {
@@ -16,28 +17,57 @@ describe("gitBranchColors", () => {
     expect(gitGraphLaneColor(-1)).toBe(GIT_GRAPH_LANE_COLORS[GIT_GRAPH_LANE_COLOR_COUNT - 1]);
   });
 
-  it("anchors an unselected branch at its candidate position", () => {
-    const colors = assignGitBranchColors(["b"], ["a", "b", "c"]);
-    expect(colors.get("a")).toBe(GIT_GRAPH_LANE_COLORS[0]);
-    expect(colors.get("b")).toBe(GIT_GRAPH_LANE_COLORS[1]);
-    expect(colors.get("c")).toBe(GIT_GRAPH_LANE_COLORS[2]);
+  it("takes each ref's colour from the lane its commit draws", () => {
+    const commits: ColoredRefCommit[] = [
+      { sha: "a", refs: [{ name: "main", kind: "branch" }] },
+      { sha: "b", refs: [{ name: "origin/main", kind: "remote" }] },
+    ];
+    const colors = branchColorsFromLayout(
+      commits,
+      new Map([
+        ["a", 2],
+        ["b", 5],
+      ]),
+    );
+
+    expect(colors.get("main")).toBe(GIT_GRAPH_LANE_COLORS[2]);
+    expect(colors.get("origin/main")).toBe(GIT_GRAPH_LANE_COLORS[5]);
   });
 
-  it("keeps selected branches distinct when their candidate positions collide", () => {
-    const candidates = Array.from({ length: 20 }, (_value, index) => `branch-${index}`);
-    // Positions 0 and 10 share a palette slot; the later selected branch probes forward.
-    const selected = [candidates[0]!, candidates[10]!];
-    const colors = assignGitBranchColors(selected, candidates);
+  it("ignores head pseudo-refs and tags, and keeps the first commit that carries a ref", () => {
+    const commits: ColoredRefCommit[] = [
+      { sha: "a", refs: [{ name: "HEAD", kind: "head" }] },
+      { sha: "b", refs: [{ name: "v1", kind: "tag" }] },
+      {
+        sha: "c",
+        refs: [
+          { name: "main", kind: "branch" },
+          { name: "origin/main", kind: "remote" },
+        ],
+      },
+      // A duplicate decoration (an older clone of the same commit) must not repaint it.
+      { sha: "d", refs: [{ name: "main", kind: "branch" }] },
+    ];
+    const colors = branchColorsFromLayout(
+      commits,
+      new Map([
+        ["a", 7],
+        ["b", 8],
+        ["c", 3],
+        ["d", 9],
+      ]),
+    );
 
-    expect(colors.get(candidates[0]!)).toBe(GIT_GRAPH_LANE_COLORS[0]);
-    expect(colors.get(candidates[10]!)).toBe(GIT_GRAPH_LANE_COLORS[1]);
-    expect(colors.get(candidates[0]!)).not.toBe(colors.get(candidates[10]!));
+    expect(colors.has("HEAD")).toBe(false);
+    expect(colors.has("v1")).toBe(false);
+    expect(colors.get("main")).toBe(GIT_GRAPH_LANE_COLORS[3]);
+    expect(colors.get("origin/main")).toBe(GIT_GRAPH_LANE_COLORS[3]);
   });
 
-  it("gives every selected branch its own colour within the budget", () => {
-    const candidates = Array.from({ length: 8 }, (_value, index) => `b${index}`);
-    const colors = assignGitBranchColors(candidates, candidates);
-    const used = candidates.map((branch) => colors.get(branch));
-    expect(new Set(used).size).toBe(candidates.length);
+  it("skips commits the layout did not colour", () => {
+    const commits: ColoredRefCommit[] = [
+      { sha: "missing", refs: [{ name: "ghost", kind: "branch" }] },
+    ];
+    expect(branchColorsFromLayout(commits, new Map()).size).toBe(0);
   });
 });

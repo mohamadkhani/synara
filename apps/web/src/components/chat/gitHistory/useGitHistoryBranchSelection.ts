@@ -32,6 +32,8 @@ export interface GitHistoryBranchSelection {
   readonly showOnly: (branch: string) => void;
   readonly hideRest: (branch: string) => void;
   readonly showAll: () => void;
+  /** Forgets the stored set for this repository, so the smart default returns. */
+  readonly reset: () => void;
 }
 
 export function useGitHistoryBranchSelection(input: {
@@ -127,5 +129,19 @@ export function useGitHistoryBranchSelection(input: {
     apply(relevanceOrder.slice(0, budget), null);
   }, [apply, budget, relevanceOrder]);
 
-  return { selected, dropped, toggle, showOnly, hideRest, showAll };
+  // Drop the stored set for this repository instead of writing the default into it: the
+  // next render falls back to the smart default, which follows the current branch and its
+  // upstream even after they move.
+  const reset = useCallback(() => {
+    if (!cwd) return;
+    setSelectionByRepo((previous) => {
+      if (!(cwd in previous)) return previous;
+      const remaining: Record<string, readonly string[]> = { ...previous };
+      delete remaining[cwd];
+      return remaining;
+    });
+    setDropped(null);
+  }, [cwd, setSelectionByRepo]);
+
+  return { selected, dropped, toggle, showOnly, hideRest, showAll, reset };
 }

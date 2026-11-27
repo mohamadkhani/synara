@@ -15,9 +15,39 @@ import { gitGraphLaneColor } from "./gitBranchColors";
 import {
   GIT_GRAPH_LANE_WIDTH,
   GIT_GRAPH_ROW_HEIGHT,
-  resolveGitGraphGutter,
+  type GitGraphLane,
   type GitGraphRow,
 } from "./gitGraphLayout";
+
+/** Slack a row keeps to the right of its own lanes, so a lane can never touch the edge. */
+const GIT_GRAPH_LANE_INSET = 8;
+
+/**
+ * Free space a row lets the scrollbar cover: the graph column is a fixed, capped width, so
+ * nothing meaningful sits under it and a scrollbar appearing mid-session cannot chop a lane.
+ */
+export const GIT_GRAPH_SCROLLBAR_GUTTER = 16;
+
+/**
+ * Columns shown by default. The commit graph is laid out to a *fixed* column width rather
+ * than to the pane: a pane-sized graph repaints (and re-measures) the whole list every time
+ * the vertical scrollbar appears, which reset the scroll position, and it squeezed the commit
+ * text on a branch-heavy walk. Beyond this many lanes the graph scrolls sideways on its own.
+ */
+export const GIT_GRAPH_COLUMN_LANE_LIMIT = 24;
+
+/** Width of the graph SVG for a row that draws `laneCount` columns. */
+export function gitGraphSvgWidth(laneCount: number): number {
+  return Math.max(1, laneCount) * GIT_GRAPH_LANE_WIDTH + GIT_GRAPH_LANE_INSET;
+}
+
+/** Width of the graph column for a whole layout: the widest row, up to the column cap. */
+export function gitGraphColumnWidth(layout: { readonly laneCount: number }): number {
+  return (
+    Math.min(Math.max(1, layout.laneCount), GIT_GRAPH_COLUMN_LANE_LIMIT) * GIT_GRAPH_LANE_WIDTH +
+    GIT_GRAPH_LANE_INSET
+  );
+}
 
 function laneCenter(lane: number, laneWidth: number): number {
   return lane * laneWidth + laneWidth / 2;
@@ -37,6 +67,18 @@ function buildCurve(
   }
   const controlY = (fromY + toY) / 2;
   return `M ${fromX} ${fromY} C ${fromX} ${controlY}, ${toX} ${controlY}, ${toX} ${toY}`;
+}
+
+/**
+ * A row spans the list unless the graph is wider than the column it reserved. An inline
+ * `width` always beats the `w-full` class, so writing it unconditionally shrank every row
+ * to its graph and left no room for the subject.
+ */
+function rowStyle(columnWidth: number | undefined, graphWidth: number) {
+  const width = Math.max(columnWidth ?? 0, graphWidth);
+  return columnWidth === undefined || width <= columnWidth
+    ? { height: GIT_GRAPH_ROW_HEIGHT }
+    : { height: GIT_GRAPH_ROW_HEIGHT, width, minWidth: width };
 }
 
 const COMMIT_ROW_CLASS_NAME =
@@ -82,12 +124,10 @@ function CommitRowSummary(props: {
 export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   commit: GitHistoryCommit;
   row: GitGraphRow;
-  /** Lanes this pane can draw; deeper lanes of this row are left out. */
-  laneCap: number;
-  /** Tooltip for a lane that only stops because its parent is not loaded yet. */
-  pendingParentTitle?: string;
   selected: boolean;
   onSelect: (sha: string) => void;
+  /** Width of the graph column shared by every row (see `gitGraphColumnWidth`). */
+  columnWidth?: number;
   authorLabel: string;
   timeLabel: string;
   dateTimeLabel: string;
@@ -102,27 +142,14 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   const { commit, row } = props;
   const height = GIT_GRAPH_ROW_HEIGHT;
   const laneWidth = GIT_GRAPH_LANE_WIDTH;
-  // No separate graph column: the row draws only the columns it actually uses, and its
-  // content starts right after them. Lanes keep their column for life, so every line
-  // stays vertical. A row deeper than the pane can draw leaves the extra lanes out.
-  const rowColumns = Math.max(row.topColumns, row.bottomColumns, 1);
-  const gutter = resolveGitGraphGutter(rowColumns, props.laneCap);
-  const width = gutter.lanes * laneWidth;
+  // The row draws every lane it carries. Its width comes from the graph column — the same
+  // width for every row — so a scrollbar appearing mid-session never re-measures the list;
+  // with fewer lanes than the column the SVG still fills it, with more it is wider and the
+  // list scrolls sideways.
+  const width = Math.max(props.columnWidth ?? 0, gitGraphSvgWidth(row.laneCount));
   const mid = height / 2;
-  const laneOutside = row.lane >= gutter.lanes;
-  const commitColumn = laneOutside ? gutter.lanes - 1 : row.lane;
-  const commitX = laneCenter(commitColumn, laneWidth);
-  const laneFits = (lane: number) => lane < gutter.lanes;
-  /**
-   * Colour of a lane as the layout recorded it: a lane keeps its colour while it is open,
-   * and a column a later branch reuses gets a fresh one, so two branches in one column
-   * never read as a single broken line.
-   */
-  const colorOf = (lane: number, edge: "top" | "bottom" = "top") => {
-    const colors = edge === "bottom" ? row.bottomLaneColors : row.topLaneColors;
-    return gitGraphLaneColor(colors[lane] ?? lane);
-  };
-  const color = colorOf(row.lane);
+  const commitX = laneCenter(row.lane, laneWidth);
+  const color = gitGraphLaneColor(row.color);
   const isCheckedOut = commit.refs.some((ref) => ref.kind === "head");
 
   return (
@@ -134,7 +161,7 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
       }
       aria-pressed={props.selected}
       title={commit.subject}
-      style={{ height }}
+      style={rowStyle(props.columnWidth, width)}
       className={cn(
         COMMIT_ROW_CLASS_NAME,
         props.selected ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
@@ -147,10 +174,40 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
         className="shrink-0"
         aria-hidden="true"
       >
-        {row.continuesBelow && props.pendingParentTitle ? (
-          <title>{props.pendingParentTitle}</title>
-        ) : null}
-        {row.continuesFromAbove && !laneOutside ? (
+        {row.passthrough.map((edge) => (
+          <path
+            key={`through-${edge.input}`}
+            d={
+              edge.input === edge.output
+                ? `M ${laneCenter(edge.input, laneWidth)} 0 L ${laneCenter(edge.input, laneWidth)} ${height}`
+                : buildCurve(edge.input, edge.output, 0, height, laneWidth)
+            }
+            stroke={gitGraphLaneColor(row.inputLanes[edge.input]?.color ?? edge.input)}
+            strokeWidth={2}
+            fill="none"
+          />
+        ))}
+        {row.convergingLanes.map((lane) => (
+          <path
+            key={`incoming-${lane}`}
+            d={buildCurve(lane, row.lane, 0, mid, laneWidth)}
+            stroke={gitGraphLaneColor(row.inputLanes[lane]?.color ?? lane)}
+            strokeWidth={2}
+            fill="none"
+          />
+        ))}
+        {row.parentLanes.map((lane) => (
+          <path
+            key={`parent-${lane}`}
+            d={buildCurve(row.lane, lane, mid, height, laneWidth)}
+            // The edge into a merged branch carries that branch's colour, so a merge does
+            // not paint the outgoing side with the first parent's hue.
+            stroke={gitGraphLaneColor(row.outputLanes[lane]?.color ?? lane)}
+            strokeWidth={2}
+            fill="none"
+          />
+        ))}
+        {row.continuesFromAbove ? (
           <path
             d={`M ${commitX} 0 L ${commitX} ${mid}`}
             stroke={color}
@@ -158,58 +215,22 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
             fill="none"
           />
         ) : null}
-        {row.throughLanes.filter(laneFits).map((lane) => (
+        {row.continuesBelow ? (
           <path
-            key={`through-${lane}`}
-            d={`M ${laneCenter(lane, laneWidth)} 0 L ${laneCenter(lane, laneWidth)} ${height}`}
-            stroke={colorOf(lane)}
-            strokeWidth={2}
-            fill="none"
-          />
-        ))}
-        {row.incomingLanes.filter(laneFits).map((lane) => (
-          <path
-            key={`incoming-${lane}`}
-            d={buildCurve(lane, commitColumn, 0, mid, laneWidth)}
-            stroke={colorOf(lane)}
-            strokeWidth={2}
-            fill="none"
-          />
-        ))}
-        {row.parentLanes.filter(laneFits).map((lane) => (
-          <path
-            key={`parent-${lane}`}
-            d={buildCurve(commitColumn, lane, mid, height, laneWidth)}
-            // The edge into a merged branch carries that branch's color, so a merge does
-            // not paint the incoming side with the target branch's hue.
-            stroke={colorOf(lane, "bottom")}
-            strokeWidth={2}
-            fill="none"
-          />
-        ))}
-        {row.releasedLanes.filter(laneFits).map((lane) => (
-          <path
-            key={`released-${lane}`}
             d={`M ${commitX} ${mid} L ${commitX} ${height}`}
-            stroke={colorOf(lane)}
+            stroke={color}
             strokeWidth={2}
             fill="none"
-            // A lane that stops only because its parent sits in a page the reader has
-            // not opened keeps a dashed tail, so the end reads as "continues below"
-            // rather than as a broken line.
-            {...(row.continuesBelow ? { strokeDasharray: "3 3" } : {})}
           />
-        ))}
+        ) : null}
         <circle
+          data-git-graph-dot={commit.sha}
           cx={commitX}
           cy={mid}
-          r={laneOutside ? 3 : isCheckedOut ? 4.6 : 3.4}
-          // A commit whose lane is outside the drawn window has no real column here, so
-          // its marker is a hollow outline: a filled dot in a lane color would read as a
-          // lane this commit does not belong to.
-          fill={laneOutside ? "none" : isCheckedOut ? "var(--color-background)" : color}
-          stroke={laneOutside ? "var(--color-muted-foreground)" : isCheckedOut ? color : "none"}
-          strokeWidth={laneOutside ? 1.5 : isCheckedOut ? 2 : 0}
+          r={isCheckedOut ? 4.6 : 3.4}
+          fill={isCheckedOut ? "var(--color-background)" : color}
+          stroke={isCheckedOut ? color : "none"}
+          strokeWidth={isCheckedOut ? 2 : 0}
         />
       </svg>
       <CommitRowSummary
@@ -224,10 +245,50 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   );
 });
 
+/**
+ * Placeholder drawn after the last commit while more history can be loaded: one straight
+ * vertical line per lane still open at the bottom of the walk, so a branch that has not
+ * finished loading reads as continuing below the last row. The lines are drawn at full
+ * strength and simply end with the list: fading them out made every lane look like a
+ * detached fragment at the boundary, which is the same broken read as a dashed stub.
+ * VS Code draws the same row at its page boundary.
+ */
+export const GitGraphContinuationRow = memo(function GitGraphContinuationRow(props: {
+  lanes: ReadonlyArray<GitGraphLane>;
+  /** Same graph column as the commit rows, so the lanes line up. */
+  columnWidth?: number;
+}) {
+  const height = GIT_GRAPH_ROW_HEIGHT;
+  const laneWidth = GIT_GRAPH_LANE_WIDTH;
+  const width = Math.max(props.columnWidth ?? 0, gitGraphSvgWidth(props.lanes.length));
+  return (
+    <div
+      aria-hidden="true"
+      data-git-graph-continuation=""
+      className="shrink-0"
+      style={{ height, width }}
+    >
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
+        {props.lanes.map((lane, index) => (
+          <path
+            key={`${lane.id}-${index}`}
+            d={`M ${laneCenter(index, laneWidth)} 0 L ${laneCenter(index, laneWidth)} ${height}`}
+            stroke={gitGraphLaneColor(lane.color)}
+            strokeWidth={2}
+            fill="none"
+          />
+        ))}
+      </svg>
+    </div>
+  );
+});
+
 /** Flat fallback row used while a text filter hides the graph. */
 export const GitCommitFlatRow = memo(function GitCommitFlatRow(props: {
   commit: GitHistoryCommit;
   selected: boolean;
+  /** Kept so the text filter keeps the same left edge as the graph rows. */
+  columnWidth?: number;
   onSelect: (sha: string) => void;
   authorLabel: string;
   timeLabel: string;
@@ -279,8 +340,10 @@ export const GitStashRow = memo(function GitStashRow(props: {
   selected?: boolean;
   onSelect?: (stash: GitStashEntry) => void;
   onContextMenu?: (event: ReactMouseEvent) => void;
+  /** Graph column width, so the text of every row starts at the same place. */
+  columnWidth?: number;
 }) {
-  const gutterWidth = GIT_GRAPH_LANE_WIDTH;
+  const gutterWidth = props.columnWidth ?? GIT_GRAPH_LANE_WIDTH;
   return (
     <button
       type="button"
@@ -288,7 +351,7 @@ export const GitStashRow = memo(function GitStashRow(props: {
       onClick={() => props.onSelect?.(props.stash)}
       onContextMenu={props.onContextMenu}
       title={`${props.stash.stashRef}: ${props.stash.message}`}
-      style={{ height: GIT_GRAPH_ROW_HEIGHT }}
+      style={rowStyle(props.columnWidth, props.columnWidth ?? GIT_GRAPH_LANE_WIDTH)}
       className={cn(
         COMMIT_ROW_CLASS_NAME,
         "cursor-pointer select-none",
@@ -322,10 +385,12 @@ export const GitWorkingTreeRow = memo(function GitWorkingTreeRow(props: {
   selected: boolean;
   onSelect: () => void;
   onContextMenu?: (event: ReactMouseEvent) => void;
+  /** Graph column width, so the text of every row starts at the same place. */
+  columnWidth?: number;
 }) {
   // The working-tree row has no lanes of its own; its icon sits in the first lane
   // column and the label follows immediately, like a one-lane commit row.
-  const gutterWidth = GIT_GRAPH_LANE_WIDTH;
+  const gutterWidth = props.columnWidth ?? GIT_GRAPH_LANE_WIDTH;
   return (
     <button
       type="button"
@@ -333,7 +398,7 @@ export const GitWorkingTreeRow = memo(function GitWorkingTreeRow(props: {
       onContextMenu={props.onContextMenu}
       aria-pressed={props.selected}
       title={props.label}
-      style={{ height: GIT_GRAPH_ROW_HEIGHT }}
+      style={rowStyle(props.columnWidth, props.columnWidth ?? GIT_GRAPH_LANE_WIDTH)}
       className={cn(
         COMMIT_ROW_CLASS_NAME,
         // The working-tree rows are few and act like buttons; commit rows are a long

@@ -78,6 +78,7 @@ vi.mock("../../ui/toast", () => ({ toastManager: { add: harness.toastAdd } }));
 
 import { GitHistoryPanel } from "./GitHistoryPanel";
 import { GIT_HISTORY_SELECTION_STORAGE_KEY } from "./gitHistorySelection";
+import { GIT_GRAPH_LANE_WIDTH, GIT_GRAPH_ROW_HEIGHT } from "./gitGraphLayout";
 
 const commit: GitHistoryCommit = {
   sha: "a".repeat(40),
@@ -94,6 +95,14 @@ const commit: GitHistoryCommit = {
 };
 
 const clients: QueryClient[] = [];
+
+/** The chip at the head of the bar; the promotion test reads its data attribute. */
+function headChipName(): string | null {
+  return (
+    document.querySelector('[data-testid^="branch-chip-"]')?.getAttribute("data-branch-chip") ??
+    null
+  );
+}
 
 interface BranchFixture {
   name: string;
@@ -128,7 +137,9 @@ function mount() {
   client.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
   return render(
     <QueryClientProvider client={client}>
-      <div style={{ height: 480 }}>
+      {/* A grid wrapper stretches the panel to a real height, so the graph has the viewport
+          geometry it has in the app (the promotion and row-count tests depend on it). */}
+      <div style={{ display: "grid", height: 480 }}>
         <GitHistoryPanel activeCwd="/repo" primaryCwd="/repo" theme="light" />
       </div>
     </QueryClientProvider>,
@@ -268,10 +279,97 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
-  it("keeps drawing lanes when the history is deeper than the pane's cap", async () => {
-    // Forty lanes on one row exceed the cap of any pane width. The row clips to the cap
-    // and keeps drawing lanes; it does not turn the list into one rail. The parents are
-    // loaded, so each really needs a lane.
+  it("keeps the commit subject readable next to the graph column", async () => {
+    // The graph column is a fixed width now, so this is the guard that it did not eat the
+    // row: a commit row must still show a readable subject at a normal pane width.
+    harness.listCommitHistory.mockResolvedValue({
+      commits: [
+        {
+          ...commit,
+          sha: "1".repeat(40),
+          subject: "Improve project cache warmup and staged orchestration review fixes",
+          parents: ["2".repeat(40)],
+          refs: [{ name: "feat/readable", kind: "branch", checkedOut: true }],
+        },
+        {
+          ...commit,
+          sha: "2".repeat(40),
+          subject: "Second commit with a reasonably long subject line for measuring",
+          parents: [],
+          refs: [],
+        },
+      ],
+      hasMore: false,
+    });
+    const screen = await mount();
+
+    const row = document.querySelector<HTMLElement>('button[title^="Improve project cache"]')!;
+    expect(row).not.toBeNull();
+    const subject = Array.from(row.querySelectorAll("span")).find(
+      (span) =>
+        span.textContent === "Improve project cache warmup and staged orchestration review fixes",
+    )!;
+    // Assert it is actually laid out with room: the test fails if the column leaves the
+    // subject zero width or one glyph.
+    expect(subject).not.toBeUndefined();
+    expect(subject.getBoundingClientRect().width).toBeGreaterThan(120);
+    await screen.unmount();
+  });
+
+  it("keeps every lane clear of the list's scrollbar and of its right edge", async () => {
+    // Many lanes and enough rows to overflow: the vertical scrollbar is on screen, and a
+    // pane-sized row used to run underneath it, chopping the right-hand lanes. The graph
+    // column is a fixed, capped width now, and its SVG stops 8px past the last lane.
+    const parentNames = Array.from({ length: 40 }, (_value, index) => `w${index}`);
+    harness.listCommitHistory.mockResolvedValue({
+      commits: [
+        {
+          ...commit,
+          sha: "1".repeat(40),
+          subject: "wide tip",
+          parents: parentNames.map((name) => name.padEnd(40, "x")),
+          refs: [],
+        },
+        ...parentNames.map((name) => ({
+          ...commit,
+          sha: name.padEnd(40, "x"),
+          subject: `leaf ${name}`,
+          parents: [],
+          refs: [],
+        })),
+        ...Array.from({ length: 40 }, (_value, index) => ({
+          ...commit,
+          sha: `f${index}`.padEnd(40, "x"),
+          subject: `filler ${index}`,
+          parents: [],
+          refs: [],
+        })),
+      ],
+      hasMore: false,
+    });
+    const screen = await mount();
+
+    const row = page.getByTitle("wide tip");
+    await expect.element(row).toBeVisible();
+    const scroller = document.querySelector<HTMLElement>("[data-git-history-scroll]")!;
+    expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
+
+    const svg = row.element().querySelector("svg")!;
+    const svgRight = svg.getBoundingClientRect().right;
+    const scrollerRight = scroller.getBoundingClientRect().right;
+    const scrollbarWidth = scroller.offsetWidth - scroller.clientWidth;
+    const lastLaneCenter = 39 * GIT_GRAPH_LANE_WIDTH + GIT_GRAPH_LANE_WIDTH / 2;
+    expect(svg.getBoundingClientRect().left + lastLaneCenter).toBeLessThan(
+      svgRight - GIT_GRAPH_LANE_WIDTH,
+    );
+    // The widest row ends at least one scrollbar's width before the list's edge.
+    expect(svgRight).toBeLessThanOrEqual(scrollerRight - scrollbarWidth + 1);
+    await screen.unmount();
+  });
+
+  it("draws every lane a wide row carries, with no cap", async () => {
+    // Forty parents are all loaded, so each really needs a lane. The row draws all forty
+    // columns: no clipping and no "simplified" banner.
     const parentNames = Array.from({ length: 40 }, (_value, index) => `q${index}`);
     harness.listCommitHistory.mockResolvedValue({
       commits: [
@@ -296,19 +394,20 @@ describe("GitHistoryPanel", () => {
 
     const row = page.getByTitle("deep row");
     await expect.element(row).toBeVisible();
-    // Capped below the forty lanes the row needs, but still a multi-lane graph: a rail
-    // would draw a single twelve-pixel column with one path.
-    const width = Number(row.element().querySelector("svg")?.getAttribute("width"));
-    expect(width).toBeGreaterThan(12);
-    expect(width).toBeLessThan(40 * 12);
-    expect(row.element().querySelectorAll("path").length).toBeGreaterThan(1);
-    await expect.element(page.getByText(/parallel branches/)).toBeVisible();
+    const svg = row.element().querySelector("svg");
+    // Every lane plus the inset that keeps the last lane off the row's edge.
+    expect(Number(svg?.getAttribute("width"))).toBe(40 * GIT_GRAPH_LANE_WIDTH + 8);
+    expect(row.element().querySelectorAll("path").length).toBe(40);
+    expect(row.element().querySelector("circle")?.getAttribute("fill")).toContain(
+      "var(--color-git-lane-",
+    );
+    await expect.element(page.getByText(/parallel branches/)).not.toBeInTheDocument();
     await screen.unmount();
   });
 
-  it("marks a lane that stops at the loaded page boundary as continuing", async () => {
-    // The commit's parent is in a page the reader has not opened, so its line ends here.
-    // The stub is dashed so the end reads as "continues below", not as a broken line.
+  it("continues the open lanes in a continuation row instead of a dashed stub", async () => {
+    // Both parents are in a page the reader has not opened; the last row still carries two
+    // open lanes, and the placeholder above the "load more" button draws them on.
     harness.listCommitHistory.mockResolvedValue({
       commits: [
         {
@@ -318,56 +417,31 @@ describe("GitHistoryPanel", () => {
           parents: ["9".repeat(40)],
           refs: [],
         },
-        { ...commit, sha: "2".repeat(40), subject: "loaded root", parents: [], refs: [] },
+        {
+          ...commit,
+          sha: "2".repeat(40),
+          subject: "loaded tip",
+          parents: ["9".repeat(40)],
+          refs: [],
+        },
       ],
       hasMore: true,
     });
     const screen = await mount();
 
-    const row = page.getByTitle("page boundary");
-    await expect.element(row).toBeVisible();
-    expect(row.element().querySelector("path[stroke-dasharray]")).not.toBeNull();
-    // A real root ends cleanly, with no dashed tail.
-    expect(
-      page.getByTitle("loaded root").element().querySelectorAll("path[stroke-dasharray]").length,
-    ).toBe(0);
-    await screen.unmount();
-  });
+    const boundaryRow = page.getByTitle("page boundary");
+    await expect.element(boundaryRow).toBeVisible();
+    // No dashed line anywhere: the boundary is drawn as a normal lane.
+    expect(boundaryRow.element().querySelectorAll("path[stroke-dasharray]").length).toBe(0);
 
-  it("marks a commit whose lane is outside the drawn window", async () => {
-    // Forty loaded parents open forty lanes, past the cap of any pane width. The rows in
-    // the deepest lanes have no drawn column, so their marker is a hollow outline rather
-    // than a lane-coloured dot; lane 0 still has its own column.
-    const parentNames = Array.from({ length: 40 }, (_value, index) => `w${index}`);
-    harness.listCommitHistory.mockResolvedValue({
-      commits: [
-        {
-          ...commit,
-          sha: "1".repeat(40),
-          subject: "wide row",
-          parents: parentNames.map((name) => name.padEnd(40, "x")),
-          refs: [],
-        },
-        ...parentNames.map((name) => ({
-          ...commit,
-          sha: name.padEnd(40, "x"),
-          subject: name,
-          parents: [],
-          refs: [],
-        })),
-      ],
-      hasMore: false,
-    });
-    const screen = await mount();
-
-    const markerOf = (subject: string) => {
-      const circle = page.getByTitle(subject, { exact: true }).element().querySelector("circle");
-      return { fill: circle?.getAttribute("fill"), stroke: circle?.getAttribute("stroke") };
-    };
-    await expect.element(page.getByTitle("w39", { exact: true })).toBeVisible();
-    expect(markerOf("w0").fill).toContain("var(--color-git-lane-");
-    expect(markerOf("w38")).toEqual({ fill: "none", stroke: "var(--color-muted-foreground)" });
-    expect(markerOf("w39")).toEqual({ fill: "none", stroke: "var(--color-muted-foreground)" });
+    const continuation = document.querySelector<HTMLElement>("[data-git-graph-continuation]");
+    expect(continuation).not.toBeNull();
+    expect(continuation!.querySelectorAll("path").length).toBe(2);
+    // Full-strength lanes: no mask, so the boundary lanes cannot read as detached fragments.
+    expect(getComputedStyle(continuation!).maskImage).toBe("none");
+    for (const path of continuation!.querySelectorAll("path")) {
+      expect(path.getBoundingClientRect().height).toBe(GIT_GRAPH_ROW_HEIGHT);
+    }
     await screen.unmount();
   });
 
@@ -399,11 +473,31 @@ describe("GitHistoryPanel", () => {
     ]);
     const screen = await mount();
 
-    await page.getByRole("button", { name: "feature/x" }).click();
+    // The ring inside the chip toggles just this branch.
+    await page.getByRole("button", { name: "Toggle feature/x in the graph" }).click();
 
     await vi.waitFor(() =>
       expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
         expect.objectContaining({ refs: ["feature/x", "main", "origin/main"] }),
+      ),
+    );
+    await screen.unmount();
+  });
+
+  it("shows only one branch when its chip body is clicked", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "feature/x" },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    const screen = await mount();
+
+    // The chip body (not the ring) narrows the graph to that branch alone.
+    await page.getByRole("button", { name: "feature/x", exact: true }).click();
+
+    await vi.waitFor(() =>
+      expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refs: ["feature/x"] }),
       ),
     );
     await screen.unmount();
@@ -438,7 +532,7 @@ describe("GitHistoryPanel", () => {
     harness.contextMenuShow.mockResolvedValue("branch-show-only");
     const screen = await mount();
 
-    await page.getByRole("button", { name: "feature/x" }).click({ button: "right" });
+    await page.getByTestId("branch-chip-feature/x").click({ button: "right" });
 
     await vi.waitFor(() =>
       expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
@@ -464,10 +558,10 @@ describe("GitHistoryPanel", () => {
 
     // The default selects main + origin/main; adding a1..a6 fills the budget of eight.
     for (const name of ["a1", "a2", "a3", "a4", "a5", "a6"]) {
-      await page.getByRole("button", { name }).click();
+      await page.getByRole("button", { name: `Toggle ${name} in the graph` }).click();
     }
     // The ninth add drops a6, the least relevant selected branch.
-    await page.getByRole("button", { name: "a7" }).click();
+    await page.getByRole("button", { name: "Toggle a7 in the graph" }).click();
 
     await vi.waitFor(() =>
       expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
@@ -476,10 +570,200 @@ describe("GitHistoryPanel", () => {
         }),
       ),
     );
-    await expect
-      .element(page.getByRole("button", { name: "a6" }))
-      .toHaveTextContent("removed · max 8");
+    await expect.element(page.getByTestId("branch-chip-a6")).toHaveTextContent("removed · max 8");
     await screen.unmount();
+  });
+
+  it("resets the chips to the smart selection and disables the button", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "feature/x" },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    const screen = await mount();
+
+    const reset = page.getByRole("button", { name: "Reset" });
+    // The default is already the smart selection, so there is nothing to undo.
+    await expect.element(reset).toBeDisabled();
+
+    await page.getByRole("button", { name: "Toggle feature/x in the graph" }).click();
+    await vi.waitFor(() =>
+      expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refs: ["feature/x", "main", "origin/main"] }),
+      ),
+    );
+    await expect.element(reset).not.toBeDisabled();
+
+    await reset.click();
+    // The earlier key for the smart selection is still cached, so the pane reuses it
+    // instead of refetching; assert the chips and the count, which are what the reader sees.
+    await expect
+      .element(page.getByRole("button", { name: "Toggle feature/x in the graph" }))
+      .toHaveAttribute("aria-pressed", "false");
+    await expect
+      .element(page.getByText("2 of 8 in the graph · 1 branches not shown"))
+      .toBeVisible();
+    await expect.element(reset).toBeDisabled();
+    await screen.unmount();
+  });
+
+  it("gives a chip the same colour as its line in the graph", async () => {
+    // Two unselected branches sit before feature/x in candidate order, so a chip coloured by
+    // candidate position would hand feature/x a different hue than the lane it draws.
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "aa" },
+      { name: "bb" },
+      { name: "feature/x" },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    const base = "3".repeat(40);
+    const featureSha = "2".repeat(40);
+    harness.listCommitHistory.mockResolvedValue({
+      commits: [
+        {
+          ...commit,
+          sha: "1".repeat(40),
+          shortSha: "1111111",
+          parents: [base],
+          subject: "Main tip",
+          refs: [
+            { name: "main", kind: "branch", checkedOut: true },
+            { name: "origin/main", kind: "remote", checkedOut: false },
+          ],
+        },
+        {
+          ...commit,
+          sha: featureSha,
+          shortSha: "2222222",
+          parents: [base],
+          subject: "Feature tip",
+          refs: [{ name: "feature/x", kind: "branch", checkedOut: false }],
+        },
+        {
+          ...commit,
+          sha: base,
+          shortSha: "3333333",
+          parents: [],
+          subject: "Shared base",
+          refs: [],
+        },
+      ],
+      hasMore: false,
+    });
+    const screen = await mount();
+
+    await page.getByRole("button", { name: "Toggle feature/x in the graph" }).click();
+    await vi.waitFor(() =>
+      expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          refs: ["feature/x", "main", "origin/main"],
+        }),
+      ),
+    );
+
+    const chip = document.querySelector<HTMLElement>('[data-testid="branch-chip-feature/x"]')!;
+    const chipRing = chip.querySelector<HTMLElement>("[data-branch-ring]")!;
+    const graphDot = document.querySelector<SVGCircleElement>(
+      `[data-git-graph-dot="${featureSha}"]`,
+    )!;
+    expect(getComputedStyle(chipRing).borderTopColor).toBe(getComputedStyle(graphDot).fill);
+    await screen.unmount();
+  });
+
+  it("keeps the graph scroll position when the chip selection changes", async () => {
+    setBranches([{ name: "main", current: true, isDefault: true }, { name: "feature/x" }]);
+    const many = Array.from({ length: 60 }, (_value, index) => ({
+      ...commit,
+      sha: `${index}`.padStart(40, "0"),
+      shortSha: `${index}`.padStart(7, "0"),
+      parents: index === 59 ? [] : [`${index + 1}`.padStart(40, "0")],
+      subject: `Commit ${index}`,
+      refs: index === 0 ? [{ name: "main", kind: "branch" as const, checkedOut: true }] : [],
+    }));
+    harness.listCommitHistory.mockResolvedValue({ commits: many, hasMore: false });
+    const screen = await mount();
+
+    const scroller = document.querySelector<HTMLElement>("[data-git-history-scroll]")!;
+    await vi.waitFor(() =>
+      expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight * 2),
+    );
+    scroller.scrollTop = 20 * GIT_GRAPH_ROW_HEIGHT;
+    scroller.dispatchEvent(new Event("scroll"));
+    await vi.waitFor(() => expect(scroller.scrollTop).toBe(20 * GIT_GRAPH_ROW_HEIGHT));
+
+    await page.getByRole("button", { name: "Toggle feature/x in the graph" }).click();
+
+    // The new walk keeps the previous pages rendered while it loads, so the list never
+    // collapses and the reader is not thrown back to the newest commit.
+    await expect
+      .element(page.getByRole("button", { name: "Toggle feature/x in the graph" }))
+      .toHaveAttribute("aria-pressed", "true");
+    await vi.waitFor(() =>
+      expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refs: ["feature/x", "main"] }),
+      ),
+    );
+    expect(scroller.scrollTop).toBe(20 * GIT_GRAPH_ROW_HEIGHT);
+    await screen.unmount();
+  });
+
+  it("moves the branches visible in the graph to the head of the chip bar", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "a1" },
+      { name: "zzz" },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    const commits = Array.from({ length: 40 }, (_value, index) => ({
+      ...commit,
+      sha: `${index}`.padStart(40, "0"),
+      shortSha: `${index}`.padStart(7, "0"),
+      parents: [],
+      subject: `Commit ${index}`,
+      refs:
+        index === 0
+          ? [{ name: "zzz", kind: "branch" as const, checkedOut: false }]
+          : index === 30
+            ? [{ name: "a1", kind: "branch" as const, checkedOut: false }]
+            : [],
+    }));
+    harness.listCommitHistory.mockResolvedValue({ commits, hasMore: false });
+    const screen = await mount();
+
+    // Only the top row of the graph is on screen, so only zzz is promoted.
+    await vi.waitFor(() => expect(headChipName()).toBe("zzz"));
+
+    // Scrolling to the far end promotes a1 and drops zzz back into candidate order.
+    const scroller = document.querySelector<HTMLElement>("[data-git-history-scroll]")!;
+    scroller.scrollTop = 30 * GIT_GRAPH_ROW_HEIGHT;
+    scroller.dispatchEvent(new Event("scroll"));
+    await vi.waitFor(() => expect(headChipName()).toBe("a1"));
+    await screen.unmount();
+  });
+
+  it("keeps the chip bar on one row when the branches fit, and two when they do not", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "feature/x" },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    const screen = await mount();
+    await expect.element(page.getByTestId("branch-chip-feature/x")).toBeVisible();
+    expect(document.querySelectorAll("[data-chip-row]").length).toBe(1);
+    await screen.unmount();
+
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      ...Array.from({ length: 24 }, (_value, index) => ({
+        name: `branch-${String(index).padStart(2, "0")}`,
+      })),
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    const wide = await mount();
+    await expect.element(page.getByTestId("branch-chip-branch-23")).toBeVisible();
+    await vi.waitFor(() => expect(document.querySelectorAll("[data-chip-row]").length).toBe(2));
+    await wide.unmount();
   });
 
   it("shows the short remote name on the chip and the full ref on hover", async () => {

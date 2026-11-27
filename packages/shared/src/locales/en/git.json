@@ -322,7 +322,6 @@
   "diffRefreshing": "Refreshing diff...",
   "closeSourceControl": "Close source control",
   "historyTabHistory": "Git Graph",
-  "historyGraphSimplified": "This history spans {{value1}} parallel branches; the first {{value0}} lanes are drawn. Filter by a branch to see the whole graph.",
   "historyShowRemoteBranches": "Show remote branches",
   "historyRemoteChip": "Remote",
   "historyBranchSelectionCount": "{{value0}} of {{value1}} in the graph",
@@ -331,6 +330,9 @@
   "historyBranchShowOnly": "Show only this",
   "historyBranchHideRest": "Hide the rest",
   "historyBranchShowAll": "Show all branches",
+  "historyBranchToggle": "Toggle {{value0}} in the graph",
+  "historyBranchReset": "Reset",
+  "historyBranchResetHint": "Reset to the smart selection (the current branch and its upstream)",
   "historySearchPlaceholder": "Filter commits",
   "historyRefresh": "Refresh history",
   "historyFetch": "Fetch",
@@ -474,6 +476,5 @@
   "historyWorktreeActive": "Active",
   "historyWorktreeArchived": "Archived",
   "historyWorktreeShowArchived": "Show archived and unused worktrees ({{value0}})",
-  "historyWorktreeHideArchived": "Hide archived and unused worktrees",
-  "historyGraphContinuesBelow": "This branch continues further down; its line is not drawn in this view."
+  "historyWorktreeHideArchived": "Hide archived and unused worktrees"
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { layoutGitGraph, type GitGraphLayout, type GitGraphRow } from "./gitGraphLayout";
+import { GIT_GRAPH_LANE_COLOR_COUNT } from "./gitBranchColors";
+import { layoutGitGraph, type GitGraphLayout } from "./gitGraphLayout";
 
 /** Deterministic PRNG so a failure is reproducible from the printed seed. */
 function mulberry32(seed: number) {
@@ -40,92 +41,160 @@ function randomHistory(seed: number, size: number) {
   return commits;
 }
 
-/** Columns a row draws a line into at its bottom edge. */
-const columnsDrawnBelow = (row: GitGraphRow) =>
-  new Set<number>([...row.releasedLanes, ...row.throughLanes, ...row.parentLanes]);
+function isSubsequence(sub: readonly string[], full: readonly string[]): boolean {
+  let matched = 0;
+  for (const id of full) {
+    if (matched < sub.length && sub[matched] === id) matched += 1;
+  }
+  return matched === sub.length;
+}
 
+/**
+ * The five invariants of the carried-swimlane model, plus our deviation (a parent that
+ * already appeared higher in the walk gets no lane, because no lane can run upward).
+ */
 function assertInvariants(
   layout: GitGraphLayout,
   commits: ReadonlyArray<{ sha: string; parents: readonly string[] }>,
   seed: number,
-  holdLimitRows: number,
 ) {
   const positionBySha = new Map(commits.map((commit, position) => [commit.sha, position]));
+  // A parent gets a lane when it is below the commit or not loaded yet; only a parent
+  // that already appeared above its child is skipped (our deviation).
+  const canHold = (parent: string, position: number) => {
+    const parentPosition = positionBySha.get(parent);
+    return parentPosition === undefined || parentPosition > position;
+  };
+
   layout.rows.forEach((row, index) => {
-    const drawnColumns = Math.max(row.topColumns, row.bottomColumns, 1);
-    const referenced = [
-      row.lane,
-      ...row.throughLanes,
-      ...row.incomingLanes,
-      ...row.parentLanes,
-      ...row.releasedLanes,
-    ];
-    // No element points at a column the row does not draw.
-    for (const lane of referenced) {
-      expect(
-        lane,
-        `seed ${seed} row ${index}: lane ${lane} outside ${drawnColumns} columns`,
-      ).toBeLessThan(drawnColumns);
-      expect(lane).toBeGreaterThanOrEqual(0);
+    const commit = commits[index]!;
+    const where = `seed ${seed} row ${index}`;
+
+    // 1. Every row's input is a deep copy of the previous row's output.
+    const previous = layout.rows[index - 1];
+    expect(row.inputLanes, `${where}: input not carried`).toEqual(previous?.outputLanes ?? []);
+
+    // 2. A commit with no parents empties the lane array.
+    if (commit.parents.length === 0) {
+      expect(row.outputLanes, `${where}: root kept lanes`).toEqual([]);
     }
-    // A lane that continues from above must have been drawn at the previous row's bottom.
-    if (index > 0 && row.continuesFromAbove) {
+
+    const matchingInputs = row.inputLanes.filter((lane) => lane.id === commit.sha);
+    const pendingInputs = row.inputLanes.filter((lane) => lane.id !== commit.sha);
+    const holdableParents = commit.parents.filter((parent) => canHold(parent, index));
+
+    if (commit.parents.length > 0) {
+      // 4. Output = input minus the matched slot(s) plus one node per holdable parent.
       expect(
-        columnsDrawnBelow(layout.rows[index - 1]!).has(row.lane),
-        `seed ${seed} row ${index}: lane ${row.lane} continues from a column that was empty`,
+        row.outputLanes.length,
+        `${where}: wrong output size pending=${pendingInputs.length} parents=${holdableParents.length}`,
+      ).toBe(pendingInputs.length + holdableParents.length);
+
+      // 3. Every output lane is a pending input lane (still waiting), or a holdable parent.
+      for (const lane of row.outputLanes) {
+        const fromInput = pendingInputs.some((input) => input.id === lane.id);
+        const fromParent = holdableParents.includes(lane.id);
+        expect(fromInput || fromParent, `${where}: lane ${lane.id} has no source`).toBe(true);
+      }
+      // Every holdable parent gets a lane; no lane is created for the others (the deviation,
+      // beyond the passthrough a pending input lane may already occupy).
+      for (const parent of holdableParents) {
+        expect(
+          row.outputLanes.some((lane) => lane.id === parent),
+          `${where}: dropped ${parent}`,
+        ).toBe(true);
+      }
+
+      // Non-matching input lanes are copied through in order, with no compaction.
+      expect(
+        isSubsequence(
+          pendingInputs.map((lane) => lane.id),
+          row.outputLanes.map((lane) => lane.id),
+        ),
+        `${where}: pending lanes reordered`,
+      ).toBe(true);
+
+      // The commit's own id never survives into the output.
+      expect(
+        row.outputLanes.some((lane) => lane.id === commit.sha),
+        `${where}: self lane`,
+      ).toBe(false);
+    }
+
+    // An unmatched commit keeps every input lane.
+    if (matchingInputs.length === 0 && commit.parents.length > 0) {
+      expect(
+        row.outputLanes.slice(0, row.inputLanes.length).map((lane) => lane.id),
+        `${where}: unmatched commit dropped a lane`,
+      ).toEqual(row.inputLanes.map((lane) => lane.id));
+    }
+
+    // Geometry.
+    expect(row.lane, `${where}: dot outside the row`).toBeGreaterThanOrEqual(0);
+    expect(row.lane, `${where}: dot outside the row`).toBeLessThan(row.laneCount);
+    expect(row.laneCount, `${where}: wrong width`).toBe(
+      Math.max(row.inputLanes.length, row.outputLanes.length, row.lane + 1, 1),
+    );
+    expect(row.continuesFromAbove, `${where}: wrong above flag`).toBe(matchingInputs.length > 0);
+    expect(row.convergingLanes, `${where}: wrong converging lanes`).toEqual(
+      row.inputLanes
+        .map((lane, laneIndex) =>
+          lane.id === commit.sha && laneIndex !== row.lane ? laneIndex : -1,
+        )
+        .filter((laneIndex) => laneIndex >= 0),
+    );
+
+    const passthroughInputs = new Set<number>();
+    let lastOutput = -1;
+    for (const edge of row.passthrough) {
+      expect(edge.input, `${where}: passthrough input`).toBeLessThan(row.inputLanes.length);
+      expect(edge.output, `${where}: passthrough output`).toBeLessThan(row.outputLanes.length);
+      expect(row.inputLanes[edge.input]!.id, `${where}: passthrough id changed`).toBe(
+        row.outputLanes[edge.output]!.id,
+      );
+      expect(edge.output, `${where}: lane moved right`).toBeLessThanOrEqual(edge.input);
+      expect(edge.output, `${where}: passthrough out of order`).toBeGreaterThan(lastOutput);
+      lastOutput = edge.output;
+      passthroughInputs.add(edge.input);
+    }
+    // A root empties the lane array, so its other lanes are dropped rather than drawn.
+    if (commit.parents.length > 0) {
+      for (const pending of pendingInputs) {
+        const index = row.inputLanes.indexOf(pending);
+        expect(passthroughInputs.has(index), `${where}: pending lane not drawn`).toBe(true);
+      }
+    }
+
+    for (const parent of row.parentLanes) {
+      expect(parent, `${where}: parent lane out of range`).toBeLessThan(row.outputLanes.length);
+      expect(parent, `${where}: parent lane on the dot`).not.toBe(row.lane);
+      expect(
+        commit.parents.includes(row.outputLanes[parent]!.id),
+        `${where}: parent lane is not a parent`,
       ).toBe(true);
     }
-    // A stub means "the branch continues but the line is not drawn", never a real end.
-    if (row.releasedLanes.length > 0) {
-      expect(row.continuesBelow, `seed ${seed} row ${index}: stub without a reason`).toBe(true);
-      expect(commits[index]!.parents.length).toBeGreaterThan(0);
+
+    expect(row.continuesBelow, `${where}: wrong below flag`).toBe(
+      row.outputLanes[row.lane] !== undefined &&
+        commit.parents.includes(row.outputLanes[row.lane]!.id),
+    );
+
+    // Colours stay in the shared palette.
+    for (const lane of [...row.inputLanes, ...row.outputLanes]) {
+      expect(lane.color, `${where}: colour out of range`).toBeGreaterThanOrEqual(0);
+      expect(lane.color, `${where}: colour out of range`).toBeLessThan(GIT_GRAPH_LANE_COLOR_COUNT);
     }
-    // "Continues below" is about the first parent: an unheld mainline connection is
-    // marked, while a nearby merge parent may still draw its own edge.
-    const firstParent = commits[index]!.parents[0];
-    const firstParentPosition =
-      firstParent === undefined ? undefined : positionBySha.get(firstParent);
-    const firstParentHeld =
-      firstParentPosition !== undefined &&
-      firstParentPosition > index &&
-      firstParentPosition - index <= holdLimitRows;
-    expect(row.continuesBelow, `seed ${seed} row ${index}: wrong continues-below flag`).toBe(
-      firstParent !== undefined && !firstParentHeld,
-    );
-    // Every parent the layout can draw gets its line: nothing is dropped silently.
-    const drawableParents = new Set(
-      commits[index]!.parents.filter((parent) => {
-        const parentPosition = positionBySha.get(parent);
-        return (
-          parentPosition !== undefined &&
-          parentPosition > index &&
-          parentPosition - index <= holdLimitRows
-        );
-      }),
-    );
-    expect(
-      row.parentLanes.length,
-      `seed ${seed} row ${index}: dropped a drawable parent; parents=${commits[index]!.parents.map(
-        (parent) => `${parent}@${positionBySha.get(parent)}`,
-      ).join(
-        ",",
-      )} lane=${row.lane} topColumns=${row.topColumns} below=${row.continuesBelow} stub=${JSON.stringify(row.releasedLanes)}`,
-    ).toBe(drawableParents.size);
+    expect(row.color, `${where}: dot colour out of range`).toBeLessThan(GIT_GRAPH_LANE_COLOR_COUNT);
   });
 }
 
 describe("layoutGitGraph invariants", () => {
   it("holds for random histories", () => {
-    for (let seed = 1; seed <= 60; seed += 1) {
-      const commits = randomHistory(seed, 40 + (seed % 60));
-      assertInvariants(layoutGitGraph(commits), commits, seed, 80);
-    }
-  });
-
-  it("holds when the hold limit is tiny", () => {
+    // Twenty seeds cover the shapes (chain, merge, root, parent-above-child) while keeping
+    // the assertion-heavy run comfortably inside the default per-test timeout.
     for (let seed = 1; seed <= 20; seed += 1) {
-      const commits = randomHistory(seed, 60);
-      assertInvariants(layoutGitGraph(commits, { holdLimitRows: 3 }), commits, seed, 3);
+      const commits = randomHistory(seed, 40 + (seed % 60));
+      assertInvariants(layoutGitGraph(commits), commits, seed);
     }
   });
 });
