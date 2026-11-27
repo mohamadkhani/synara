@@ -1255,7 +1255,13 @@ it.layer(TestLayer)("git integration", (it) => {
   describe("commit history", () => {
     const readHistory = (
       cwd: string,
-      input: { limit?: number; skip?: number; ref?: string; includeRemoteBranches?: boolean },
+      input: {
+        limit?: number;
+        skip?: number;
+        ref?: string;
+        refs?: readonly string[];
+        includeRemoteBranches?: boolean;
+      },
     ) =>
       Effect.gen(function* () {
         return yield* (yield* GitCore).listCommitHistory({ cwd, ...input });
@@ -1369,6 +1375,90 @@ it.layer(TestLayer)("git integration", (it) => {
 
         expect(defaultPage.commits.some((commit) => commit.subject === "side commit")).toBe(false);
         expect(sidePage.commits[0]?.subject).toBe("side commit");
+      }),
+    );
+
+    it.effect("walks the union of selected refs, including a commit only one of them reaches", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+        // `side` advances the initial commit; `default` gets its own commit on top of
+        // the same root, so neither branch contains the other's commit.
+        yield* (yield* GitCore).createBranch({ cwd: tmp, branch: "side" });
+        yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "side" });
+        yield* commitWithDate(
+          tmp,
+          "side.txt",
+          "side\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "side only commit",
+        );
+        yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: defaultBranch });
+        yield* commitWithDate(
+          tmp,
+          "main.txt",
+          "main\n",
+          "Fri, 1 Jan 2038 00:00:00 +0000",
+          "default only commit",
+        );
+
+        const union = yield* readHistory(tmp, { refs: ["side", defaultBranch] });
+        const subjects = union.commits.map((commit) => commit.subject);
+
+        expect(subjects).toContain("initial commit");
+        expect(subjects).toContain("side only commit");
+        // Reachable from the second ref only: the union still walks it.
+        expect(subjects).toContain("default only commit");
+      }),
+    );
+
+    it.effect("rejects an unknown ref in a selected set with a clear message", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const error = yield* readHistory(tmp, { refs: ["does-not-exist"] }).pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+        expect(error.message).toContain("Cannot resolve");
+      }),
+    );
+
+    it.effect("rejects an option-like ref in a selected set before touching git log", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const error = yield* readHistory(tmp, { refs: ["--all"] }).pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+        expect(error.message).toContain("not a valid revision");
+      }),
+    );
+
+    it.effect("rejects an empty selected set with a clear message", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const error = yield* readHistory(tmp, { refs: [] }).pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+        expect(error.message).toContain("at least one ref");
+      }),
+    );
+
+    it.effect("rejects a selected set larger than the cap with a clear message", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const tooMany = Array.from({ length: 33 }, (_value, index) => `ref-${index}`);
+
+        const error = yield* readHistory(tmp, { refs: tooMany }).pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(GitCommandError);
+        expect(error.message).toContain("At most 32");
       }),
     );
 

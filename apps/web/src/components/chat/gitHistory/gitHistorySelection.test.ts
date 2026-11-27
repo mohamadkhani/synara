@@ -1,0 +1,130 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  GIT_HISTORY_BRANCH_BUDGET,
+  computeDefaultBranchSelection,
+  sanitizeBranchSelection,
+  toggleBranchSelection,
+} from "./gitHistorySelection";
+
+const candidates = ["main", "origin/main", "feature/a", "feature/b", "origin/feature/c"];
+
+describe("computeDefaultBranchSelection", () => {
+  it("starts from the current branch and its upstream", () => {
+    expect(
+      computeDefaultBranchSelection({
+        candidates,
+        currentBranch: "main",
+        upstreamBranch: "origin/main",
+        defaultBranch: "main",
+      }),
+    ).toEqual(["main", "origin/main"]);
+  });
+
+  it("falls back to the current branch when it has no upstream", () => {
+    expect(
+      computeDefaultBranchSelection({
+        candidates,
+        currentBranch: "feature/a",
+        upstreamBranch: null,
+        defaultBranch: "main",
+      }),
+    ).toEqual(["feature/a"]);
+  });
+
+  it("falls back to the default branch on a detached HEAD", () => {
+    expect(
+      computeDefaultBranchSelection({
+        candidates,
+        currentBranch: null,
+        upstreamBranch: null,
+        defaultBranch: "main",
+      }),
+    ).toEqual(["main"]);
+  });
+
+  it("drops branches that are not candidates and stays within the budget", () => {
+    const many = Array.from({ length: 12 }, (_value, index) => `b${index}`);
+    expect(
+      computeDefaultBranchSelection({
+        candidates: many,
+        currentBranch: null,
+        upstreamBranch: null,
+        defaultBranch: "b3",
+        budget: 2,
+      }),
+    ).toEqual(["b3"]);
+    expect(
+      computeDefaultBranchSelection({
+        candidates,
+        currentBranch: "gone",
+        upstreamBranch: "origin/main",
+        defaultBranch: null,
+      }),
+    ).toEqual(["origin/main"]);
+  });
+});
+
+describe("sanitizeBranchSelection", () => {
+  it("keeps only branches that are still candidates, in order", () => {
+    expect(sanitizeBranchSelection(["feature/b", "gone", "main"], candidates)).toEqual([
+      "feature/b",
+      "main",
+    ]);
+  });
+});
+
+describe("toggleBranchSelection", () => {
+  const relevanceOrder = candidates;
+
+  it("turns a branch on", () => {
+    const result = toggleBranchSelection({
+      selected: ["main"],
+      branch: "feature/a",
+      relevanceOrder,
+    });
+    expect(result).toEqual({ selected: ["main", "feature/a"], dropped: null });
+  });
+
+  it("turns a branch off", () => {
+    const result = toggleBranchSelection({
+      selected: ["main", "feature/a"],
+      branch: "feature/a",
+      relevanceOrder,
+    });
+    expect(result).toEqual({ selected: ["main"], dropped: null });
+  });
+
+  it("never turns off the last selected branch", () => {
+    const result = toggleBranchSelection({
+      selected: ["main"],
+      branch: "main",
+      relevanceOrder,
+    });
+    expect(result).toEqual({ selected: ["main"], dropped: null });
+  });
+
+  it("drops the least relevant branch when a ninth one is turned on", () => {
+    const selected = [
+      "main",
+      "origin/main",
+      "feature/a",
+      "feature/b",
+      "origin/feature/c",
+      "b5",
+      "b6",
+      "b7",
+    ];
+    const result = toggleBranchSelection({
+      selected,
+      branch: "b8",
+      relevanceOrder: [...candidates, "b5", "b6", "b7", "b8"],
+    });
+
+    expect(result.selected).toHaveLength(GIT_HISTORY_BRANCH_BUDGET);
+    expect(result.selected).toContain("b8");
+    // "b7" sits last in relevance order, so it is the one the budget drops.
+    expect(result.dropped).toBe("b7");
+    expect(result.selected).not.toContain("b7");
+  });
+});

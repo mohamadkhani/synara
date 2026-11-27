@@ -15,6 +15,7 @@ import { Effect, Result } from "effect";
 import {
   DEFAULT_GIT_COMMIT_HISTORY_LIMIT,
   MAX_GIT_COMMIT_HISTORY_LIMIT,
+  MAX_GIT_COMMIT_HISTORY_REFS,
   type GitBranchActionResult,
   type GitCheckoutRemoteBranchResult,
   type GitCommitActionResult,
@@ -159,13 +160,62 @@ export function makeGitHistoryOps(deps: GitHistoryOpsDeps): {
       const ref = input.ref?.trim() ?? "";
       const includeRemoteBranches = input.includeRemoteBranches !== false;
 
+      // A selected set of refs narrows the walk to exactly those branches, which is how
+      // the graph keeps its width in the data layer instead of clipping lanes at render
+      // time. `refs` takes precedence over the single `ref`; an empty or oversized list
+      // is rejected here as well as at the contract boundary, because the service is
+      // also called directly.
+      const refs = input.refs;
+      if (refs !== undefined) {
+        if (refs.length === 0) {
+          return yield* createGitCommandError(
+            "GitCore.listCommitHistory",
+            input.cwd,
+            ["log"],
+            "Select at least one ref to walk.",
+          );
+        }
+        if (refs.length > MAX_GIT_COMMIT_HISTORY_REFS) {
+          return yield* createGitCommandError(
+            "GitCore.listCommitHistory",
+            input.cwd,
+            ["log"],
+            `At most ${MAX_GIT_COMMIT_HISTORY_REFS} refs can be walked at once.`,
+          );
+        }
+      }
+
       // Resolve a caller-supplied revision first so an unknown ref reports a real
       // error instead of silently walking HEAD, and so option-like values never
-      // reach `git log` as arguments.
+      // reach `git log` as arguments. Every entry of `refs` goes through the same
+      // rule; resolving also proves the ref names a commit before it is placed on the
+      // command line.
       const resolvedRef =
-        ref.length > 0
+        refs === undefined && ref.length > 0
           ? yield* resolveCommitObjectId(input.cwd, ref, "GitCore.listCommitHistory")
           : null;
+      const resolvedRefs =
+        refs === undefined
+          ? []
+          : [
+              ...new Set(
+                yield* Effect.forEach(refs, (value) =>
+                  resolveCommitObjectId(input.cwd, value.trim(), "GitCore.listCommitHistory"),
+                ),
+              ),
+            ];
+
+      // `--exclude` only affects the all-refs walk (`--all`); an explicit revision is
+      // never filtered by it, so the selected-refs path lists only its refs. That walk
+      // starts at branches the user chose, which never include the stash, notes,
+      // replace, bisect, or checkpoint namespaces the all-refs walk excludes.
+      const hiddenRefExcludes = [
+        "--exclude=refs/stash",
+        `--exclude=${CHECKPOINT_REFS_PREFIX}/*`,
+        "--exclude=refs/notes/*",
+        "--exclude=refs/replace/*",
+        "--exclude=refs/bisect/*",
+      ];
 
       const args = [
         "log",
@@ -182,26 +232,24 @@ export function makeGitHistoryOps(deps: GitHistoryOpsDeps): {
         String(limit + 1),
         "--skip",
         String(skip),
-        // Synara's turn checkpoints live under refs/synara/checkpoints. They are
-        // local snapshots for diff/rewind, not branches a user browses, so keep
-        // them out of the graph instead of flooding it with snapshot commits.
-        // `--all` also walks refs/notes, refs/replace, and refs/bisect, which would
-        // surface unrelated commits such as "Notes added by 'git notes add'" as
-        // graph roots, so exclude those namespaces too. HEAD stays included for a
-        // detached checkout.
-        ...(resolvedRef === null
-          ? [
-              "--exclude=refs/stash",
-              `--exclude=${CHECKPOINT_REFS_PREFIX}/*`,
-              "--exclude=refs/notes/*",
-              "--exclude=refs/replace/*",
-              "--exclude=refs/bisect/*",
-              // The toolbar's "Show remote branches" switch; remote-only commits drop
-              // out of the graph when it is off.
-              ...(includeRemoteBranches ? [] : ["--exclude=refs/remotes/*"]),
-              "--all",
-            ]
-          : [resolvedRef]),
+        ...(resolvedRefs.length > 0
+          ? resolvedRefs
+          : resolvedRef === null
+            ? [
+                ...hiddenRefExcludes,
+                // The toolbar's "Show remote branches" switch; remote-only commits drop
+                // out of the graph when it is off.
+                ...(includeRemoteBranches ? [] : ["--exclude=refs/remotes/*"]),
+                // Synara's turn checkpoints live under refs/synara/checkpoints. They are
+                // local snapshots for diff/rewind, not branches a user browses, so keep
+                // them out of the graph instead of flooding it with snapshot commits.
+                // The other excludes above keep refs/notes, refs/replace, and refs/bisect
+                // out too: `--all` walks them, which would surface unrelated commits such
+                // as "Notes added by 'git notes add'" as graph roots. HEAD stays included
+                // for a detached checkout.
+                "--all",
+              ]
+            : [resolvedRef]),
         "--",
       ];
 

@@ -203,7 +203,7 @@ const historyStatusSnapshot = (overrides: Partial<Record<string, unknown>> = {})
 
 describe("commit history refresh gating", () => {
   const historyKey = (cwd: string) =>
-    gitQueryKeys.commitHistory(cwd, null, DEFAULT_GIT_COMMIT_HISTORY_LIMIT);
+    gitQueryKeys.commitHistory(cwd, null, null, DEFAULT_GIT_COMMIT_HISTORY_LIMIT);
   // An active history query whose reads are counted; staleTime keeps every read
   // explicit so a count of 1 means nothing re-read it.
   const observeHistory = (queryClient: QueryClient, cwd: string) => {

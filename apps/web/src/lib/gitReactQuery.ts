@@ -53,8 +53,13 @@ export const gitQueryKeys = {
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
   recentCommits: (cwd: string | null, limit: number) =>
     ["git", "recent-commits", cwd, limit] as const,
-  commitHistory: (cwd: string | null, ref: string | null, limit: number, includeRemote = true) =>
-    ["git", "commit-history", cwd, ref, limit, includeRemote] as const,
+  commitHistory: (
+    cwd: string | null,
+    ref: string | null,
+    refs: readonly string[] | null,
+    limit: number,
+    includeRemote = true,
+  ) => ["git", "commit-history", cwd, ref, refs, limit, includeRemote] as const,
   commitDiff: (cwd: string | null, sha: string | null) => ["git", "commit-diff", cwd, sha] as const,
   pullRequest: (cwd: string | null) => ["git", "pull-request", cwd] as const,
   workingTreeDiffs: (cwd: string | null) => ["git", "working-tree-diff", cwd] as const,
@@ -659,6 +664,8 @@ export function gitRecentCommitsQueryOptions(input: {
 export function gitCommitHistoryQueryOptions(input: {
   cwd: string | null;
   ref: string | null;
+  /** Selected refs the graph walks together; takes precedence over `ref` when non-empty. */
+  refs?: readonly string[] | null;
   limit?: number;
   /** False drops `refs/remotes/*` from the all-refs walk (the toolbar switch). */
   includeRemoteBranches?: boolean;
@@ -666,8 +673,11 @@ export function gitCommitHistoryQueryOptions(input: {
 }) {
   const limit = input.limit ?? DEFAULT_GIT_COMMIT_HISTORY_LIMIT;
   const includeRemoteBranches = input.includeRemoteBranches ?? true;
+  // Sort the selection so the same set always maps to one cache key, whatever order
+  // the chips were toggled in; `git log` walks a starting set independently of order.
+  const refs = input.refs && input.refs.length > 0 ? input.refs.toSorted() : null;
   return infiniteQueryOptions({
-    queryKey: gitQueryKeys.commitHistory(input.cwd, input.ref, limit, includeRemoteBranches),
+    queryKey: gitQueryKeys.commitHistory(input.cwd, input.ref, refs, limit, includeRemoteBranches),
     queryFn: async ({ pageParam }) => {
       const api = ensureNativeApi();
       if (!input.cwd) throw new Error("Commit history is unavailable.");
@@ -676,6 +686,7 @@ export function gitCommitHistoryQueryOptions(input: {
         limit,
         skip: pageParam,
         includeRemoteBranches,
+        ...(refs ? { refs } : {}),
         ...(input.ref ? { ref: input.ref } : {}),
       });
     },

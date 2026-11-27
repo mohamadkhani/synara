@@ -16,6 +16,7 @@ import { serverQueryKeys } from "~/lib/serverReactQuery";
 const harness = vi.hoisted(() => ({
   listBranches: vi.fn(),
   listCommitHistory: vi.fn(),
+  status: vi.fn(),
   workingTreeDiffStats: vi.fn(),
   githubRepository: vi.fn(),
   readCommitDiff: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("~/nativeApi", () => {
     git: {
       listBranches: harness.listBranches,
       listCommitHistory: harness.listCommitHistory,
+      status: harness.status,
       workingTreeDiffStats: harness.workingTreeDiffStats,
       githubRepository: harness.githubRepository,
       readCommitDiff: harness.readCommitDiff,
@@ -75,6 +77,7 @@ vi.mock("~/nativeApi", () => {
 vi.mock("../../ui/toast", () => ({ toastManager: { add: harness.toastAdd } }));
 
 import { GitHistoryPanel } from "./GitHistoryPanel";
+import { GIT_HISTORY_SELECTION_STORAGE_KEY } from "./gitHistorySelection";
 
 const commit: GitHistoryCommit = {
   sha: "a".repeat(40),
@@ -91,6 +94,31 @@ const commit: GitHistoryCommit = {
 };
 
 const clients: QueryClient[] = [];
+
+interface BranchFixture {
+  name: string;
+  isRemote?: boolean;
+  remoteName?: string;
+  current?: boolean;
+  isDefault?: boolean;
+}
+
+/** Replaces the branch list the panel reads, before it mounts. */
+function setBranches(branches: BranchFixture[]) {
+  harness.listBranches.mockResolvedValue({
+    branches: branches.map((entry) => ({
+      name: entry.name,
+      ...(entry.isRemote === true ? { isRemote: true } : {}),
+      ...(entry.remoteName ? { remoteName: entry.remoteName } : {}),
+      current: entry.current === true,
+      isDefault: entry.isDefault === true,
+      worktreePath: null,
+    })),
+    isRepo: true,
+    hasOriginRemote: true,
+    remoteNames: ["origin"],
+  });
+}
 
 function mount() {
   const client = new QueryClient({
@@ -118,6 +146,17 @@ beforeEach(async () => {
     remoteNames: ["origin"],
   });
   harness.listCommitHistory.mockResolvedValue({ commits: [commit], hasMore: false });
+  harness.status.mockReset();
+  harness.status.mockResolvedValue({
+    branch: "main",
+    hasWorkingTreeChanges: false,
+    workingTree: { files: [], insertions: 0, deletions: 0 },
+    hasUpstream: true,
+    upstreamBranch: "origin/main",
+    aheadCount: 0,
+    behindCount: 0,
+    pr: null,
+  });
   harness.workingTreeDiffStats.mockResolvedValue({ additions: 0, deletions: 0, fileCount: 0 });
   harness.githubRepository.mockResolvedValue({ repository: null, repositories: [] });
   harness.readCommitDiff.mockResolvedValue({
@@ -166,6 +205,7 @@ afterEach(() => {
   document.body.innerHTML = "";
   localStorage.removeItem("synara:server-settings-migrated:v1");
   localStorage.removeItem("synara:app-settings:v1");
+  localStorage.removeItem(GIT_HISTORY_SELECTION_STORAGE_KEY);
 });
 
 describe("GitHistoryPanel", () => {
@@ -331,61 +371,114 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
-  it("groups remote branches by namespace and filters them by name", async () => {
-    harness.listBranches.mockResolvedValue({
-      branches: [
-        { name: "main", current: true, isDefault: true, worktreePath: null },
-        {
-          name: "origin/main",
-          isRemote: true,
-          remoteName: "origin",
-          current: false,
-          isDefault: false,
-          worktreePath: null,
-        },
-        {
-          name: "origin/synara/fix-one",
-          isRemote: true,
-          remoteName: "origin",
-          current: false,
-          isDefault: false,
-          worktreePath: null,
-        },
-        {
-          name: "origin/codex/thing",
-          isRemote: true,
-          remoteName: "origin",
-          current: false,
-          isDefault: false,
-          worktreePath: null,
-        },
-      ],
-      isRepo: true,
-      hasOriginRemote: true,
-      remoteNames: ["origin"],
-    });
+  it("walks the current branch and its upstream by default", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "feature/x" },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+      { name: "origin/feature/x", isRemote: true, remoteName: "origin" },
+    ]);
     const screen = await mount();
 
-    await page.getByRole("button", { name: "Branches" }).click();
-    await expect.element(page.getByRole("menuitem", { name: /synara/ })).toBeVisible();
-    await expect.element(page.getByRole("menuitem", { name: /codex/ })).toBeVisible();
-
-    await page.getByLabelText("Filter branches").fill("fix-one");
-    await expect
-      .element(page.getByRole("menuitemradio", { name: "origin/synara/fix-one" }))
-      .toBeVisible();
-    // The other namespaces drop out of the filtered list.
-    expect(page.getByRole("menuitemradio", { name: "origin/codex/thing" }).elements()).toHaveLength(
-      0,
-    );
-
-    await page.getByRole("menuitemcheckbox", { name: "Show remote branches" }).click();
     await vi.waitFor(() =>
       expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
-        expect.objectContaining({ includeRemoteBranches: false }),
+        expect.objectContaining({ refs: ["main", "origin/main"] }),
       ),
     );
-    // Close the menu before unmounting so its portal is not torn down with the root.
+    await expect
+      .element(page.getByText("2 of 8 in the graph · 2 branches not shown"))
+      .toBeVisible();
+    await screen.unmount();
+  });
+
+  it("toggles a branch chip into the walk", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "feature/x" },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    const screen = await mount();
+
+    await page.getByRole("button", { name: "feature/x" }).click();
+
+    await vi.waitFor(() =>
+      expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refs: ["feature/x", "main", "origin/main"] }),
+      ),
+    );
+    await screen.unmount();
+  });
+
+  it("drops remote chips and remote refs when the switch turns off", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "feature/x" },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    const screen = await mount();
+
+    await expect.element(page.getByRole("button", { name: "origin/main" })).toBeVisible();
+    await page.getByRole("button", { name: "Show remote branches" }).click();
+
+    await vi.waitFor(() =>
+      expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refs: ["main"], includeRemoteBranches: false }),
+      ),
+    );
+    await expect.element(page.getByRole("button", { name: "origin/main" })).not.toBeInTheDocument();
+    await screen.unmount();
+  });
+
+  it("shows only the branch chosen from a chip's context menu", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "feature/x" },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    harness.contextMenuShow.mockResolvedValue("branch-show-only");
+    const screen = await mount();
+
+    await page.getByRole("button", { name: "feature/x" }).click({ button: "right" });
+
+    await vi.waitFor(() =>
+      expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refs: ["feature/x"] }),
+      ),
+    );
+    await screen.unmount();
+  });
+
+  it("drops the least relevant branch over the budget and says so on its chip", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "a1" },
+      { name: "a2" },
+      { name: "a3" },
+      { name: "a4" },
+      { name: "a5" },
+      { name: "a6" },
+      { name: "a7" },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    const screen = await mount();
+
+    // The default selects main + origin/main; adding a1..a6 fills the budget of eight.
+    for (const name of ["a1", "a2", "a3", "a4", "a5", "a6"]) {
+      await page.getByRole("button", { name }).click();
+    }
+    // The ninth add drops a6, the least relevant selected branch.
+    await page.getByRole("button", { name: "a7" }).click();
+
+    await vi.waitFor(() =>
+      expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          refs: ["a1", "a2", "a3", "a4", "a5", "a7", "main", "origin/main"],
+        }),
+      ),
+    );
+    await expect
+      .element(page.getByRole("button", { name: "a6" }))
+      .toHaveTextContent("removed · max 8");
     await screen.unmount();
   });
 

@@ -21,6 +21,7 @@ import {
   gitFetchMutationOptions,
   gitStashApplyMutationOptions,
   gitStashListQueryOptions,
+  gitStatusQueryOptions,
   gitWorkingTreeDiffStatsQueryOptions,
   refreshGitQueriesForCwd,
 } from "~/lib/gitReactQuery";
@@ -53,16 +54,11 @@ import { GitStashDialog, type GitStashScope } from "./GitStashDialog";
 import { useGitCommitActions } from "./useGitCommitActions";
 import { GitCommitFlatRow, GitGraphCommitRow, GitStashRow, GitWorkingTreeRow } from "./GitGraphRow";
 import { GitWorkingTreeDetail } from "./GitWorkingTreeDetail";
-import {
-  ALL_BRANCHES_VALUE,
-  CURRENT_BRANCH_VALUE,
-  GitHistoryToolbar,
-  type GitWorktreeOption,
-} from "./GitHistoryToolbar";
+import { GitHistoryToolbar, type GitWorktreeOption } from "./GitHistoryToolbar";
+import { assignGitBranchColors } from "./gitBranchColors";
+import { GIT_HISTORY_BRANCH_BUDGET } from "./gitHistorySelection";
+import { useGitHistoryBranchSelection } from "./useGitHistoryBranchSelection";
 import { GIT_GRAPH_ROW_HEIGHT, layoutGitGraph, resolveGitGraphLaneCap } from "./gitGraphLayout";
-
-/** A branch name, or one of the two reserved toolbar filter values. */
-type BranchFilterValue = string;
 
 type GitHistorySelection =
   | { kind: "commit"; sha: string }
@@ -86,7 +82,6 @@ export function GitHistoryPanel(props: {
   const { settings } = useAppSettings();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null);
-  const [branchFilter, setBranchFilter] = useState<BranchFilterValue>(ALL_BRANCHES_VALUE);
   const [search, setSearch] = useState("");
   const [selection, setSelection] = useState<GitHistorySelection | null>(null);
   // The pane can browse any worktree of the same repository. It follows the
@@ -216,6 +211,51 @@ export function GitHistoryPanel(props: {
   // A single configured remote lets the ref chips drop the `origin/` prefix; with
   // several remotes the prefix is what tells the chips apart.
   const remoteNames = useMemo(() => branchesQuery.data?.remoteNames ?? [], [branchesQuery.data]);
+  const defaultBranch = useMemo(
+    () => branchesQuery.data?.branches.find((branch) => branch.isDefault)?.name ?? null,
+    [branchesQuery.data],
+  );
+  // The chip bar lists local branches, plus remote branches while the switch is on.
+  const candidateBranches = useMemo(
+    () => [...localBranches, ...remoteBranches],
+    [localBranches, remoteBranches],
+  );
+  const candidateNames = useMemo(
+    () => candidateBranches.map((branch) => branch.name),
+    [candidateBranches],
+  );
+  // The selected refs are what the graph walks; `git log <refs...>` keeps every lane a
+  // chosen branch. The status read supplies the current branch's upstream, which the
+  // default selection follows. The pane persists the selection per repository.
+  const statusQuery = useQuery(gitStatusQueryOptions(viewCwd));
+  const upstreamBranch = statusQuery.data?.upstreamBranch ?? null;
+  // Relevance order for the budget: the current branch and its upstream first, then the
+  // repository default, then every other candidate. A full selection drops from the end.
+  const relevanceOrder = useMemo(() => {
+    const candidateSet = new Set(candidateNames);
+    const ordered: string[] = [];
+    const push = (name: string | null) => {
+      if (name && candidateSet.has(name) && !ordered.includes(name)) ordered.push(name);
+    };
+    push(currentBranch);
+    push(upstreamBranch);
+    push(defaultBranch);
+    for (const name of candidateNames) push(name);
+    return ordered;
+  }, [candidateNames, currentBranch, defaultBranch, upstreamBranch]);
+  const branchSelection = useGitHistoryBranchSelection({
+    cwd: viewCwd,
+    candidates: candidateNames,
+    relevanceOrder,
+    currentBranch,
+    upstreamBranch,
+    defaultBranch,
+  });
+  const selectedBranches = branchSelection.selected;
+  const branchColors = useMemo(
+    () => assignGitBranchColors(selectedBranches, candidateNames),
+    [candidateNames, selectedBranches],
+  );
 
   const worktreeEntries = useMemo(() => {
     const branchByPath = new Map<string, string>();
@@ -263,36 +303,16 @@ export function GitHistoryPanel(props: {
   );
   const hiddenWorktreeCount = worktreeEntries.length - worktreeOptions.length;
 
-  const historyRef =
-    branchFilter === ALL_BRANCHES_VALUE
-      ? null
-      : branchFilter === CURRENT_BRANCH_VALUE
-        ? currentBranch
-        : branchFilter;
-
   const historyQuery = useInfiniteQuery(
     gitCommitHistoryQueryOptions({
       cwd: viewCwd,
-      ref: historyRef,
+      ref: null,
+      // Only a non-empty selection narrows the walk; an empty one (no branches at all)
+      // falls back to every ref, matching how a commit graph is usually browsed.
+      refs: selectedBranches.length > 0 ? selectedBranches : null,
       includeRemoteBranches: showRemoteBranches,
     }),
   );
-
-  // A branch can disappear while it is the active filter (deleted here or by an
-  // agent), and a detached HEAD has no current branch to follow. Fall back to every
-  // ref instead of leaving the pane on a revision that no longer resolves.
-  useEffect(() => {
-    if (!branchesQuery.data) return;
-    const knownBranches = new Set([
-      ...localBranches.map((branch) => branch.name),
-      ...remoteBranches.map((branch) => branch.name),
-    ]);
-    const resolvable =
-      branchFilter === ALL_BRANCHES_VALUE ||
-      (branchFilter === CURRENT_BRANCH_VALUE && currentBranch !== null) ||
-      knownBranches.has(branchFilter);
-    if (!resolvable) setBranchFilter(ALL_BRANCHES_VALUE);
-  }, [branchFilter, branchesQuery.data, currentBranch, localBranches, remoteBranches]);
 
   // Working-tree changes appear as pseudo-commits above the real history; the stats
   // query keeps that row's file count and +/− badge cheap while a turn is running.
@@ -695,12 +715,7 @@ export function GitHistoryPanel(props: {
     });
   }, []);
 
-  const branchFilterLabel =
-    branchFilter === ALL_BRANCHES_VALUE
-      ? t("git:historyAllBranches")
-      : branchFilter === CURRENT_BRANCH_VALUE
-        ? (currentBranch ?? t("git:historyCurrentBranch"))
-        : branchFilter;
+  const hiddenBranchCount = Math.max(0, candidateNames.length - selectedBranches.length);
   const refreshing = historyQuery.isFetching && !historyQuery.isFetchingNextPage;
 
   return (
@@ -715,14 +730,18 @@ export function GitHistoryPanel(props: {
         showAllWorktrees={showAllWorktrees}
         onShowAllWorktreesChange={setShowAllWorktrees}
         hiddenWorktreeCount={hiddenWorktreeCount}
-        branchFilter={branchFilter}
-        branchFilterLabel={branchFilterLabel}
+        candidateBranches={candidateBranches}
+        selectedBranches={selectedBranches}
+        branchColors={branchColors}
+        droppedBranch={branchSelection.dropped}
+        branchBudget={GIT_HISTORY_BRANCH_BUDGET}
+        hiddenBranchCount={hiddenBranchCount}
+        onToggleBranch={branchSelection.toggle}
+        onShowOnlyBranch={branchSelection.showOnly}
+        onHideRestBranches={branchSelection.hideRest}
+        onShowAllBranches={branchSelection.showAll}
         showRemoteBranches={showRemoteBranches}
         onShowRemoteBranchesChange={setShowRemoteBranches}
-        currentBranch={currentBranch}
-        localBranches={localBranches}
-        remoteBranches={remoteBranches}
-        onBranchFilterChange={setBranchFilter}
         search={search}
         onSearchChange={setSearch}
         refreshing={refreshing}

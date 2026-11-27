@@ -315,6 +315,10 @@ export const DEFAULT_GIT_COMMIT_HISTORY_LIMIT = 100;
 // The history view pages `git log`; cap one page so a client cannot ask for an
 // unbounded walk on a large monorepo.
 export const MAX_GIT_COMMIT_HISTORY_LIMIT = 200;
+// The graph walks only the refs the user selected, so every lane belongs to a chosen
+// branch and resolves. The pane's lane budget (8) is far below this; the server cap
+// exists so a client cannot build an unbounded `git log` command line.
+export const MAX_GIT_COMMIT_HISTORY_REFS = 32;
 
 export const GitListCommitHistoryInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -327,6 +331,15 @@ export const GitListCommitHistoryInput = Schema.Struct({
   // Restrict the walk to one revision (a branch, remote branch, tag, or commit).
   // Missing means every ref, matching how a commit graph is usually browsed.
   ref: Schema.optional(GitRevisionArgumentSchema),
+  // The selected set of revisions to walk together, in preference to `ref` and the
+  // all-refs walk. Each entry obeys the same revision rules as `ref`; the list must
+  // hold at least one entry and no more than MAX_GIT_COMMIT_HISTORY_REFS.
+  refs: Schema.optional(
+    Schema.Array(GitRevisionArgumentSchema).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(MAX_GIT_COMMIT_HISTORY_REFS),
+    ),
+  ),
   // All-refs walks include `refs/remotes/*` unless this is false, which is the
   // "Show remote branches" switch in the history toolbar.
   includeRemoteBranches: Schema.optional(Schema.Boolean),

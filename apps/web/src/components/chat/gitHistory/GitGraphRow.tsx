@@ -11,39 +11,13 @@ import { ArchiveIcon, ChangesIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { DiffStat } from "../DiffStatLabel";
 import { GitCommitRefBadges } from "./GitCommitRefBadges";
+import { gitGraphLaneColor } from "./gitBranchColors";
 import {
   GIT_GRAPH_LANE_WIDTH,
   GIT_GRAPH_ROW_HEIGHT,
   resolveGitGraphGutter,
   type GitGraphRow,
 } from "./gitGraphLayout";
-
-/**
- * Saturated, mid-lightness hues so lanes stay legible on both the light and dark
- * surfaces. Defined in the `@theme` block of index.css: the generic chart tokens
- * there are grayscale and made the graph vanish on the dark background.
- */
-const GIT_GRAPH_LANE_COLOR_COUNT = 10;
-
-const GIT_GRAPH_LANE_COLORS = [
-  "var(--color-git-lane-1)",
-  "var(--color-git-lane-2)",
-  "var(--color-git-lane-3)",
-  "var(--color-git-lane-4)",
-  "var(--color-git-lane-5)",
-  "var(--color-git-lane-6)",
-  "var(--color-git-lane-7)",
-  "var(--color-git-lane-8)",
-  "var(--color-git-lane-9)",
-  "var(--color-git-lane-10)",
-] as const;
-
-function gitGraphLaneColor(colorIndex: number): string {
-  return GIT_GRAPH_LANE_COLORS[
-    ((colorIndex % GIT_GRAPH_LANE_COLOR_COUNT) + GIT_GRAPH_LANE_COLOR_COUNT) %
-      GIT_GRAPH_LANE_COLOR_COUNT
-  ]!;
-}
 
 function laneCenter(lane: number, laneWidth: number): number {
   return lane * laneWidth + laneWidth / 2;
