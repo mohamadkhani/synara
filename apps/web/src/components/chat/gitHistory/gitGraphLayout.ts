@@ -12,8 +12,8 @@
 // Documented deviation from the model: a parent that already appeared higher in the walk
 // (a rebase or clock skew orders commits that way) gets no lane, because a lane can only
 // run downward and nothing can draw a line up to a row that has already passed. VS Code
-// would append a lane that never resolves. A parent that is merely not loaded yet keeps
-// its lane: the continuation row below the list draws it, exactly as VS Code does.
+// would append a lane that never resolves. A parent that is merely not loaded yet keeps its
+// lane in the model; the list simply ends and the next page continues it.
 
 import { GIT_GRAPH_LANE_COLOR_COUNT } from "./gitBranchColors";
 
@@ -92,8 +92,8 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
 
   /**
    * A lane can only run downward, so a parent that already appeared higher in the walk
-   * gets none. A parent that is not loaded yet keeps its lane: it may sit in a page the
-   * reader has not opened, and the continuation row draws the open lane.
+   * gets none. A parent that is not loaded yet keeps its lane: it sits in a page the reader
+   * has not opened, and loading that page continues the lane where it stops.
    */
   const hasLane = (parentSha: string, position: number): boolean => {
     const parentPosition = positionBySha.get(parentSha);

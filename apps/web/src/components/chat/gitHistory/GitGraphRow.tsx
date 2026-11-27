@@ -246,50 +246,6 @@ export const GitGraphCommitRow = memo(function GitGraphCommitRow(props: {
   );
 });
 
-/**
- * Placeholder drawn after the last commit while more history can be loaded: one straight
- * vertical line per lane still open at the bottom of the walk, so a branch that has not
- * finished loading reads as continuing below the last row. The lines are drawn at full
- * strength and simply end with the list: fading them out made every lane look like a
- * detached fragment at the boundary, which is the same broken read as a dashed stub.
- * VS Code draws the same row at its page boundary.
- */
-export const GitGraphContinuationRow = memo(function GitGraphContinuationRow(props: {
-  lanes: ReadonlyArray<GitGraphLane>;
-  /** Same graph column as the commit rows, so the lanes line up. */
-  columnWidth?: number;
-}) {
-  const height = GIT_GRAPH_ROW_HEIGHT;
-  const laneWidth = GIT_GRAPH_LANE_WIDTH;
-  const laneCountWidth = gitGraphLaneWidth(props.lanes.length);
-  const width = gitGraphSvgWidth(props.lanes.length);
-  return (
-    <div
-      aria-hidden="true"
-      data-git-graph-continuation=""
-      className="shrink-0"
-      style={{ height, width }}
-    >
-      <svg
-        width={laneCountWidth}
-        height={height}
-        viewBox={`0 0 ${laneCountWidth} ${height}`}
-        aria-hidden="true"
-      >
-        {props.lanes.map((lane, index) => (
-          <path
-            key={`${lane.id}-${index}`}
-            d={`M ${laneCenter(index, laneWidth)} 0 L ${laneCenter(index, laneWidth)} ${height}`}
-            stroke={gitGraphLaneColor(lane.color)}
-            strokeWidth={2}
-            fill="none"
-          />
-        ))}
-      </svg>
-    </div>
-  );
-});
-
 /** Flat fallback row used while a text filter hides the graph. */
 export const GitCommitFlatRow = memo(function GitCommitFlatRow(props: {
   commit: GitHistoryCommit;

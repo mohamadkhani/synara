@@ -403,46 +403,6 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
-  it("continues the open lanes in a continuation row instead of a dashed stub", async () => {
-    // Both parents are in a page the reader has not opened; the last row still carries two
-    // open lanes, and the placeholder above the "load more" button draws them on.
-    harness.listCommitHistory.mockResolvedValue({
-      commits: [
-        {
-          ...commit,
-          sha: "1".repeat(40),
-          subject: "page boundary",
-          parents: ["9".repeat(40)],
-          refs: [],
-        },
-        {
-          ...commit,
-          sha: "2".repeat(40),
-          subject: "loaded tip",
-          parents: ["9".repeat(40)],
-          refs: [],
-        },
-      ],
-      hasMore: true,
-    });
-    const screen = await mount();
-
-    const boundaryRow = page.getByTitle("page boundary");
-    await expect.element(boundaryRow).toBeVisible();
-    // No dashed line anywhere: the boundary is drawn as a normal lane.
-    expect(boundaryRow.element().querySelectorAll("path[stroke-dasharray]").length).toBe(0);
-
-    const continuation = document.querySelector<HTMLElement>("[data-git-graph-continuation]");
-    expect(continuation).not.toBeNull();
-    expect(continuation!.querySelectorAll("path").length).toBe(2);
-    // Full-strength lanes: no mask, so the boundary lanes cannot read as detached fragments.
-    expect(getComputedStyle(continuation!).maskImage).toBe("none");
-    for (const path of continuation!.querySelectorAll("path")) {
-      expect(path.getBoundingClientRect().height).toBe(GIT_GRAPH_ROW_HEIGHT);
-    }
-    await screen.unmount();
-  });
-
   it("walks the current branch and its upstream by default", async () => {
     setBranches([
       { name: "main", current: true, isDefault: true },

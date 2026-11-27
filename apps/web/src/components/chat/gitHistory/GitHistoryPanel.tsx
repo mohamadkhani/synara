@@ -54,7 +54,6 @@ import { useGitCommitActions } from "./useGitCommitActions";
 import {
   GitCommitFlatRow,
   GitGraphCommitRow,
-  GitGraphContinuationRow,
   GitStashRow,
   GitWorkingTreeRow,
   gitGraphColumnWidth,
@@ -64,7 +63,7 @@ import { GitHistoryToolbar, type GitWorktreeOption } from "./GitHistoryToolbar";
 import { branchColorsFromLayout } from "./gitBranchColors";
 import { GIT_HISTORY_BRANCH_BUDGET, computeDefaultBranchSelection } from "./gitHistorySelection";
 import { useGitHistoryBranchSelection } from "./useGitHistoryBranchSelection";
-import { GIT_GRAPH_ROW_HEIGHT, layoutGitGraph, type GitGraphLane } from "./gitGraphLayout";
+import { GIT_GRAPH_ROW_HEIGHT, layoutGitGraph } from "./gitGraphLayout";
 
 type GitHistorySelection =
   | { kind: "commit"; sha: string }
@@ -74,8 +73,7 @@ type GitHistorySelection =
 type GitHistoryEntry =
   | { kind: "workingTree"; scope: "staged" | "unstaged" }
   | { kind: "stash"; stash: GitStashEntry }
-  | { kind: "commit"; commit: GitHistoryCommit }
-  | { kind: "continuation" };
+  | { kind: "commit"; commit: GitHistoryCommit };
 
 export function GitHistoryPanel(props: {
   /** The thread's own checkout: the worktree this task runs in. */
@@ -356,10 +354,9 @@ export function GitHistoryPanel(props: {
     [commits],
   );
 
-  // One width for the graph column of every row (commit, stash, working tree,
-  // continuation). A fixed column instead of a pane-width row means the list never
-  // re-measures when a scrollbar appears, and the commit text never has to share the row
-  // with a scrollbar.
+  // One width for the graph column of every row (commit, stash, working tree). A fixed
+  // column instead of a pane-width row means the list never re-measures when a scrollbar
+  // appears, and the commit text never has to share the row with a scrollbar.
   const graphColumnWidthValue = gitGraphColumnWidth(layout);
 
   const normalizedSearch = deferredSearch.trim().toLowerCase();
@@ -407,26 +404,6 @@ export function GitHistoryPanel(props: {
     selectedBranches.length !== defaultBranchSelection.length ||
     selectedBranches.some((name, index) => name !== defaultBranchSelection[index]);
 
-  // While more history can be loaded, a placeholder row after the last visible commit
-  // draws the lanes still open there, so the graph reads as continuing. A text filter hides
-  // the graph, so the placeholder is hidden with it.
-  // The continuation row repeats the last row's columns so the lanes look like they carry on.
-  // Counting `inputLanes` (every column the row drew above the dot) is what lines up with the
-  // row above: `outputLanes` can be shorter, because a lane that converges into the dot is
-  // no longer "leaving" but its column is still on screen until the row ends.
-  const continuationLanes = useMemo(() => {
-    if (!historyQuery.hasNextPage || isSearching) return [];
-    const last = visibleCommits[visibleCommits.length - 1];
-    const row = last ? rowBySha.get(last.sha) : undefined;
-    if (!row) return [];
-    const lanes: GitGraphLane[] = [];
-    for (let index = 0; index < Math.max(row.laneCount, 1); index += 1) {
-      const open = row.inputLanes[index] ?? row.outputLanes[index];
-      if (open) lanes.push(open);
-    }
-    return lanes;
-  }, [historyQuery.hasNextPage, isSearching, rowBySha, visibleCommits]);
-
   // One flat list so the virtualizer can place the pseudo-commit rows and the real
   // history on the same fixed row height. A text filter hides the working tree rows,
   // which cannot match a commit query.
@@ -450,9 +427,8 @@ export function GitHistoryPanel(props: {
       ...workingTreeEntries,
       ...stashEntries,
       ...visibleCommits.map((commit) => ({ kind: "commit" as const, commit })),
-      ...(continuationLanes.length > 0 ? [{ kind: "continuation" as const }] : []),
     ];
-  }, [continuationLanes, isSearching, stagedStats, stashes, unstagedStats, visibleCommits]);
+  }, [isSearching, stagedStats, stashes, unstagedStats, visibleCommits]);
 
   const virtualizer = useVirtualizer({
     count: entries.length,
@@ -466,10 +442,6 @@ export function GitHistoryPanel(props: {
   // window is the rows at the current scroll offset; a minimum of eight rows keeps the
   // promotion useful in a short pane. What the graph walks is unchanged: this only reorders
   // chips, so nothing refetches and the width does not grow.
-  //
-  // These virtualizer reads stay *after* the `entries` memo on purpose: reading them first
-  // made React Compiler invalidate that memo inside the render, so `entries` could recompute
-  // with a stale `continuationLanes` and the boundary row drew the wrong lane set.
   const scrollOffset = virtualizer.scrollOffset ?? 0;
   const visibleRowCount = Math.max(
     8,
@@ -881,9 +853,7 @@ export function GitHistoryPanel(props: {
                   ? entry.commit.sha
                   : entry.kind === "stash"
                     ? `stash:${entry.stash.sha}`
-                    : entry.kind === "continuation"
-                      ? "continuation"
-                      : entry.scope;
+                    : entry.scope;
               return (
                 <div
                   key={key}
@@ -911,11 +881,6 @@ export function GitHistoryPanel(props: {
                       onRefContextMenu: showRefContextMenu,
                       onCommitContextMenu: showCommitContextMenu,
                     })
-                  ) : entry.kind === "continuation" ? (
-                    <GitGraphContinuationRow
-                      lanes={continuationLanes}
-                      columnWidth={graphColumnWidthValue}
-                    />
                   ) : (
                     renderWorkingTreeRow({
                       scope: entry.scope,
