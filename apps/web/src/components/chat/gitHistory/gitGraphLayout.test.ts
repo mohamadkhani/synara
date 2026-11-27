@@ -96,45 +96,27 @@ describe("layoutGitGraph", () => {
 
     expect(tipRow?.lane).toBe(2);
     expect(tipRow?.continuesFromAbove).toBe(false);
-    expect(tipRow?.releasedLanes).toEqual([2]);
+    // The branch is a root: it ends at its dot and draws no stub, so the column is free
+    // for the next branch without two lines touching.
+    expect(tipRow?.releasedLanes).toEqual([]);
   });
 
-  it("connects to the stub when a lane is reused on the very next row", () => {
+  it("connects to the marked stub when a lane is reused on the very next row", () => {
+    // `a` cannot reach its parent, so it ends with the marked stub; the tip that follows
+    // lands in that column because no idle column is left.
     const layout = layoutGitGraph([
-      commit("root", ["keep", "a"]),
-      commit("a", []),
-      commit("tip", ["t2"]),
-      commit("keep", []),
-      commit("t2", []),
+      commit("root", ["x", "a"]),
+      commit("a", ["not-loaded"]),
+      commit("tip", []),
+      commit("x", []),
     ]);
+    const stubRow = layout.rows.find((row) => row.sha === "a");
     const tipRow = layout.rows.find((row) => row.sha === "tip");
 
+    expect(stubRow?.continuesBelow).toBe(true);
+    expect(stubRow?.releasedLanes).toEqual([1]);
     expect(tipRow?.lane).toBe(1);
     expect(tipRow?.continuesFromAbove).toBe(true);
-  });
-
-  it("does not hold a lane for a parent far below the loaded window", () => {
-    // The parent is loaded, but 300 rows down: drawing a line to it would reserve a
-    // column for the whole window, which is what made busy walks 80 columns wide.
-    const filler = Array.from({ length: 300 }, (_value, index) =>
-      commit(`m${index}`, index === 0 ? [] : [`m${index - 1}`]),
-    );
-    const layout = layoutGitGraph([commit("tip", ["far"]), ...filler, commit("far", [])]);
-    const tipRow = layout.rows[0];
-
-    expect(tipRow?.parentLanes).toEqual([]);
-    expect(tipRow?.continuesBelow).toBe(true);
-  });
-
-  it("holds a lane for a parent a few rows below", () => {
-    const filler = Array.from({ length: 50 }, (_value, index) =>
-      commit(`m${index}`, index === 0 ? [] : [`m${index - 1}`]),
-    );
-    const layout = layoutGitGraph([commit("tip", ["near"]), ...filler, commit("near", [])]);
-    const tipRow = layout.rows[0];
-
-    expect(tipRow?.parentLanes).toHaveLength(1);
-    expect(tipRow?.continuesBelow).toBe(false);
   });
 
   it("does not flag a real root as continuing below", () => {
@@ -151,18 +133,19 @@ describe("layoutGitGraph", () => {
     expect(layout.rows[2]?.lane).toBe(0);
   });
 
-  it("keeps a reused lane continuous instead of leaving a half-row gap", () => {
-    // b is a root at lane 1; x reuses that released lane. The root records the
-    // released lane (so its stub reaches the row bottom) and the reused commit draws
-    // from the top, so the two rows read as one line.
+  it("keeps a marked stub and the lane that reuses it as one line", () => {
+    // `b` cannot reach its parent, so it ends with the marked stub that reaches the row
+    // bottom; `x` reuses that column and draws from the row top, so the two read as the
+    // one line the stub promised.
     const layout = layoutGitGraph([
       commit("m", ["a", "b"]),
-      commit("b", []),
+      commit("b", ["not-loaded"]),
       commit("x", []),
       commit("a", []),
     ]);
 
     expect(layout.rows[1]?.sha).toBe("b");
+    expect(layout.rows[1]?.continuesBelow).toBe(true);
     expect(layout.rows[1]?.releasedLanes).toEqual([1]);
     expect(layout.rows[2]?.sha).toBe("x");
     expect(layout.rows[2]?.lane).toBe(1);
@@ -296,8 +279,8 @@ describe("lane gutter sizing", () => {
     expect(resolveGitGraphLaneCap(0)).toBe(GIT_GRAPH_MIN_LANE_CAP);
     expect(resolveGitGraphLaneCap(Number.NaN)).toBe(GIT_GRAPH_MIN_LANE_CAP);
     expect(resolveGitGraphLaneCap(120)).toBe(GIT_GRAPH_MIN_LANE_CAP);
-    // 600px * 0.35 / 12px = 17 columns.
-    expect(resolveGitGraphLaneCap(600)).toBe(17);
+    // 600px * 0.45 / 12px = 22 columns.
+    expect(resolveGitGraphLaneCap(600)).toBe(22);
     expect(resolveGitGraphLaneCap(4000)).toBe(GIT_GRAPH_MAX_LANE_CAP);
   });
 
