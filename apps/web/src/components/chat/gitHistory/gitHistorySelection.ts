@@ -8,10 +8,10 @@
 //          computeDefaultBranchSelection, sanitizeBranchSelection, toggleBranchSelection
 
 /**
- * How many branches the graph walks at once. The palette hands out ten distinct colours,
- * so eight selected branches always keep their own hue.
+ * How many branches the graph walks at once. The palette hands out 24 distinct colours, so a
+ * full selection still keeps one hue per branch.
  */
-export const GIT_HISTORY_BRANCH_BUDGET = 8;
+export const GIT_HISTORY_BRANCH_BUDGET = 24;
 
 /**
  * The pane persists no other view state, so the branch selection is the one thing it

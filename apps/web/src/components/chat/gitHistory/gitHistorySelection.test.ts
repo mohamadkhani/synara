@@ -106,27 +106,22 @@ describe("toggleBranchSelection", () => {
     expect(result).toEqual({ selected: ["main"], dropped: null });
   });
 
-  it("drops the least relevant branch when a ninth one is turned on", () => {
-    const selected = [
-      "main",
-      "origin/main",
-      "feature/a",
-      "feature/b",
-      "origin/feature/c",
-      "b5",
-      "b6",
-      "b7",
-    ];
+  it("drops the least relevant branch when one past the budget is turned on", () => {
+    // Fill the budget, then turn on one more: the branch last in relevance order goes.
+    const filled = Array.from(
+      { length: GIT_HISTORY_BRANCH_BUDGET },
+      (_value, index) => `b${index}`,
+    );
+    const extra = `b${GIT_HISTORY_BRANCH_BUDGET}`;
     const result = toggleBranchSelection({
-      selected,
-      branch: "b8",
-      relevanceOrder: [...candidates, "b5", "b6", "b7", "b8"],
+      selected: filled,
+      branch: extra,
+      relevanceOrder: [...filled, extra],
     });
 
     expect(result.selected).toHaveLength(GIT_HISTORY_BRANCH_BUDGET);
-    expect(result.selected).toContain("b8");
-    // "b7" sits last in relevance order, so it is the one the budget drops.
-    expect(result.dropped).toBe("b7");
-    expect(result.selected).not.toContain("b7");
+    expect(result.selected).toContain(extra);
+    // The oldest branch sits last in relevance order, so the budget drops it.
+    expect(result.dropped).toBe(`b${GIT_HISTORY_BRANCH_BUDGET - 1}`);
   });
 });

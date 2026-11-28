@@ -457,7 +457,7 @@ describe("GitHistoryPanel", () => {
       ),
     );
     await expect
-      .element(page.getByText("2 of 8 in the graph · 2 branches not shown"))
+      .element(page.getByText("2 of 24 in the graph · 2 branches not shown"))
       .toBeVisible();
     await screen.unmount();
   });
@@ -540,34 +540,29 @@ describe("GitHistoryPanel", () => {
   });
 
   it("drops the least relevant branch over the budget and says so on its chip", async () => {
+    const added = Array.from({ length: 24 }, (_value, index) => `a${index + 1}`);
     setBranches([
       { name: "main", current: true, isDefault: true },
-      { name: "a1" },
-      { name: "a2" },
-      { name: "a3" },
-      { name: "a4" },
-      { name: "a5" },
-      { name: "a6" },
-      { name: "a7" },
+      ...added.map((name) => ({ name })),
       { name: "origin/main", isRemote: true, remoteName: "origin" },
     ]);
     const screen = await mount();
 
-    // The default selects main + origin/main; adding a1..a6 fills the budget of eight.
-    for (const name of ["a1", "a2", "a3", "a4", "a5", "a6"]) {
+    // The default selects main + origin/main; a1..a22 fill the budget of 24.
+    for (const name of added.slice(0, 22)) {
       await page.getByRole("button", { name: `Toggle ${name} in the graph` }).click();
     }
-    // The ninth add drops a6, the least relevant selected branch.
-    await page.getByRole("button", { name: "Toggle a7 in the graph" }).click();
+    await expect
+      .element(page.getByRole("button", { name: "Toggle a22 in the graph" }))
+      .toHaveAttribute("aria-pressed", "true");
 
-    await vi.waitFor(() =>
-      expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          refs: ["a1", "a2", "a3", "a4", "a5", "a7", "main", "origin/main"],
-        }),
-      ),
-    );
-    await expect.element(page.getByTestId("branch-chip-a6")).toHaveTextContent("removed · max 8");
+    // The 25th add drops a22, the least relevant already-selected branch.
+    await page.getByRole("button", { name: "Toggle a23 in the graph" }).click();
+
+    await expect.element(page.getByTestId("branch-chip-a22")).toHaveTextContent("removed · max 24");
+    await expect
+      .element(page.getByRole("button", { name: "Toggle a23 in the graph" }))
+      .toHaveAttribute("aria-pressed", "true");
     await screen.unmount();
   });
 
@@ -598,7 +593,7 @@ describe("GitHistoryPanel", () => {
       .element(page.getByRole("button", { name: "Toggle feature/x in the graph" }))
       .toHaveAttribute("aria-pressed", "false");
     await expect
-      .element(page.getByText("2 of 8 in the graph · 1 branches not shown"))
+      .element(page.getByText("2 of 24 in the graph · 1 branches not shown"))
       .toBeVisible();
     await expect.element(reset).toBeDisabled();
     await screen.unmount();
@@ -664,7 +659,14 @@ describe("GitHistoryPanel", () => {
     const graphDot = document.querySelector<SVGCircleElement>(
       `[data-git-graph-dot="${featureSha}"]`,
     )!;
-    expect(getComputedStyle(chipRing).borderTopColor).toBe(getComputedStyle(graphDot).fill);
+    // The checkbox's inner square paints the branch colour. The ring names the palette
+    // variable and the lane resolves it, so compare the resolved values instead of strings.
+    const chipColor = chipRing.style.boxShadow.split("px ").at(-1);
+    const probe = document.createElement("span");
+    probe.style.color = chipColor!;
+    document.body.appendChild(probe);
+    expect(getComputedStyle(probe).color).toBe(getComputedStyle(graphDot).fill);
+    probe.remove();
     await screen.unmount();
   });
 

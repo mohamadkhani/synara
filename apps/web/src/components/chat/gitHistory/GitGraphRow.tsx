@@ -31,8 +31,9 @@ export const GIT_GRAPH_SCROLLBAR_GUTTER = 16;
  * than to the pane: a pane-sized graph repaints (and re-measures) the whole list every time
  * the vertical scrollbar appears, which reset the scroll position, and it squeezed the commit
  * text on a branch-heavy walk. Beyond this many lanes the graph scrolls sideways on its own.
+ * 36 leaves room for a full 24-branch selection plus the lanes their merge history opens.
  */
-export const GIT_GRAPH_COLUMN_LANE_LIMIT = 24;
+export const GIT_GRAPH_COLUMN_LANE_LIMIT = 36;
 
 /** Width of the graph SVG for a row that draws `laneCount` columns. */
 export function gitGraphSvgWidth(laneCount: number): number {

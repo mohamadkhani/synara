@@ -57,27 +57,28 @@ function branchChipLabel(branch: GitBranch): string {
 }
 
 /**
- * The branch on/off control, one implementation for the chip row and the filter list: a
- * square checkbox whose inner square is filled with the branch colour when selected. An
- * inner gradient (the earlier dot) was rounded and drifted off-centre under fractional zoom.
+ * The branch on/off control, one implementation for the chip row and the filter list.
+ *
+ * Drawn as a single inset box-shadow rather than a bordered box with a nested square: a
+ * nested square has to be centred by the layout, and at fractional zoom the browser rounds its
+ * box to a whole pixel and pushes it to one side. A box-shadow ring sits on the element's own
+ * edge, so it can never drift, and `inset` keeps it inside the box at every zoom level.
  */
 function BranchCheckbox(props: { selected: boolean; color: string | undefined }) {
+  const color = props.color ?? "currentColor";
   return (
     <span
       aria-hidden="true"
-      data-branch-ring=""
-      className={cn(
-        "grid size-3.5 shrink-0 place-items-center rounded-[.15rem] border-2",
-        props.selected ? "" : "border-border",
-      )}
-      style={props.selected ? { borderColor: props.color ?? "currentColor" } : undefined}
+      data-branch-ring={props.selected ? "on" : "off"}
+      data-branch-ring-color={props.selected ? color : undefined}
+      className="grid size-3.5 shrink-0 place-items-center rounded-[.15rem]"
+      style={
+        props.selected
+          ? { boxShadow: `inset 0 0 0 4px ${color}` }
+          : { boxShadow: "inset 0 0 0 1.5px var(--color-border)" }
+      }
     >
-      {props.selected ? (
-        <span
-          className="size-2 rounded-[.05rem]"
-          style={{ backgroundColor: props.color ?? "currentColor" }}
-        />
-      ) : null}
+      {props.selected ? <span className="size-1.5 bg-background" /> : null}
     </span>
   );
 }

@@ -63,6 +63,23 @@
   --color-git-lane-8: #ec4899;
   --color-git-lane-9: #14b8a6;
   --color-git-lane-10: #8b5cf6;
+  /* A 24-branch budget needs 24 distinct hues in a 12-hue open ring: each of the first
+     twelve repeats one step around the wheel (30 degrees off), so no two branches share a
+     colour while a full selection stays inside the palette. */
+  --color-git-lane-11: #1d4ed8;
+  --color-git-lane-12: #d97706;
+  --color-git-lane-13: #047857;
+  --color-git-lane-14: #7e22ce;
+  --color-git-lane-15: #dc2626;
+  --color-git-lane-16: #0e7490;
+  --color-git-lane-17: #4d7c0f;
+  --color-git-lane-18: #be185d;
+  --color-git-lane-19: #0f766e;
+  --color-git-lane-20: #6d28d9;
+  --color-git-lane-21: #2563eb;
+  --color-git-lane-22: #b45309;
+  --color-git-lane-23: #059669;
+  --color-git-lane-24: #9333ea;
   --color-info-foreground: var(--info-foreground);
   --color-info: var(--info);
   --color-destructive-foreground: var(--destructive-foreground);

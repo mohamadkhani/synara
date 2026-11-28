@@ -11,7 +11,7 @@
  * surfaces. Defined in the `@theme` block of index.css: the generic chart tokens
  * there are grayscale and made the graph vanish on the dark background.
  */
-export const GIT_GRAPH_LANE_COLOR_COUNT = 10;
+export const GIT_GRAPH_LANE_COLOR_COUNT = 24;
 
 export const GIT_GRAPH_LANE_COLORS = [
   "var(--color-git-lane-1)",
@@ -24,6 +24,20 @@ export const GIT_GRAPH_LANE_COLORS = [
   "var(--color-git-lane-8)",
   "var(--color-git-lane-9)",
   "var(--color-git-lane-10)",
+  "var(--color-git-lane-11)",
+  "var(--color-git-lane-12)",
+  "var(--color-git-lane-13)",
+  "var(--color-git-lane-14)",
+  "var(--color-git-lane-15)",
+  "var(--color-git-lane-16)",
+  "var(--color-git-lane-17)",
+  "var(--color-git-lane-18)",
+  "var(--color-git-lane-19)",
+  "var(--color-git-lane-20)",
+  "var(--color-git-lane-21)",
+  "var(--color-git-lane-22)",
+  "var(--color-git-lane-23)",
+  "var(--color-git-lane-24)",
 ] as const;
 
 /** Palette colour for a zero-based index, wrapping in both directions. */
