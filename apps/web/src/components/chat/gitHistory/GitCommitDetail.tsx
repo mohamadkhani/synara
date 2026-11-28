@@ -132,6 +132,9 @@ export function GitCommitDetail(props: {
             {commit ? (
               <GitCommitRefBadges
                 commit={commit}
+                // The detail pane has the room and is where a reader checks every ref on a
+                // commit, so it never summarises them into a "+N".
+                maxVisible={Number.POSITIVE_INFINITY}
                 {...(props.remoteNames ? { remoteNames: props.remoteNames } : {})}
                 {...(props.onRefContextMenu ? { onRefContextMenu: props.onRefContextMenu } : {})}
               />

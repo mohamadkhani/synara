@@ -61,7 +61,11 @@ import {
 import { GitWorkingTreeDetail } from "./GitWorkingTreeDetail";
 import { GitHistoryToolbar, type GitWorktreeOption } from "./GitHistoryToolbar";
 import { branchColorsFromLayout } from "./gitBranchColors";
-import { GIT_HISTORY_BRANCH_BUDGET, computeDefaultBranchSelection } from "./gitHistorySelection";
+import {
+  GIT_HISTORY_BRANCH_BUDGET,
+  computeDefaultBranchSelection,
+  defaultBranchNamesFor,
+} from "./gitHistorySelection";
 import { useGitHistoryBranchSelection } from "./useGitHistoryBranchSelection";
 import { GIT_GRAPH_ROW_HEIGHT, layoutGitGraph } from "./gitGraphLayout";
 
@@ -243,7 +247,9 @@ export function GitHistoryPanel(props: {
     };
     push(currentBranch);
     push(upstreamBranch);
-    push(defaultBranch);
+    // `main`/`master` stays near the front so it is never the branch dropped for the budget,
+    // and so "show all" always includes it.
+    for (const name of defaultBranchNamesFor(candidateNames, defaultBranch)) push(name);
     for (const name of candidateNames) push(name);
     return ordered;
   }, [candidateNames, currentBranch, defaultBranch, upstreamBranch]);

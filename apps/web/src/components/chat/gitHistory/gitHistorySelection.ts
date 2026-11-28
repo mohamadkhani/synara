@@ -22,6 +22,32 @@ export const GIT_HISTORY_BRANCH_BUDGET = 8;
  */
 export const GIT_HISTORY_SELECTION_STORAGE_KEY = "synara:git-history:selected-refs:v1";
 
+/** The conventional names of a repository's default branch. */
+const DEFAULT_BRANCH_NAMES = new Set(["main", "master"]);
+
+/**
+ * Every candidate that names the default branch, most authoritative first: the reported
+ * default, then a local `main`/`master`, then the remote tracking branch of each. Empty when
+ * the repository has neither.
+ */
+export function defaultBranchNamesFor(
+  candidates: readonly string[],
+  defaultBranch: string | null,
+): string[] {
+  const candidateSet = new Set(candidates);
+  const names: string[] = [];
+  const push = (name: string | null | undefined) => {
+    if (name && candidateSet.has(name) && !names.includes(name)) names.push(name);
+  };
+  push(defaultBranch);
+  for (const shortName of DEFAULT_BRANCH_NAMES) push(shortName);
+  for (const candidate of candidates) {
+    const shortName = candidate.includes("/") ? candidate.slice(candidate.indexOf("/") + 1) : null;
+    if (shortName && DEFAULT_BRANCH_NAMES.has(shortName)) push(candidate);
+  }
+  return names;
+}
+
 /** The deterministic default: the current branch and its upstream, then fallbacks. */
 export function computeDefaultBranchSelection(input: {
   candidates: readonly string[];
@@ -45,6 +71,12 @@ export function computeDefaultBranchSelection(input: {
     // single ref to show.
     add(input.defaultBranch);
   }
+
+  // The default branch is what a reader falls back to when the current branch is a topic
+  // branch: `main`/`master` stays in the walk whenever it exists, local first and then its
+  // remote tracking branch. It is added before the budget is applied, so it survives a full
+  // selection.
+  for (const name of defaultBranchNamesFor(input.candidates, input.defaultBranch)) add(name);
 
   return selection.slice(0, budget);
 }

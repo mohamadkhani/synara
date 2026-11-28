@@ -365,6 +365,45 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
+  it("lists every ref in the commit detail, without a +N summary", async () => {
+    // Five refs on one commit: the row caps at two chips, the detail pane must not.
+    const refs = [
+      {
+        name: "origin/synara/macos-drag-drop-permissions",
+        kind: "remote" as const,
+        checkedOut: false,
+      },
+      {
+        name: "origin/synara/fix-worktree-branch-selection",
+        kind: "remote" as const,
+        checkedOut: false,
+      },
+      { name: "origin/main", kind: "remote" as const, checkedOut: false },
+      { name: "origin/HEAD", kind: "remote" as const, checkedOut: false },
+      { name: "v1.6.5", kind: "tag" as const, checkedOut: false },
+    ];
+    harness.listCommitHistory.mockResolvedValue({
+      commits: [{ ...commit, refs }],
+      hasMore: false,
+    });
+    const screen = await mount();
+
+    await page.getByTitle(commit.subject).first().click();
+
+    await vi.waitFor(() => {
+      const chips = document.querySelectorAll('[data-git-ref-chip="true"]');
+      if (chips.length < 4) throw new Error("waiting for the detail pane");
+    });
+    // origin/HEAD is not a branch and is never listed; the other four are.
+    const labels = Array.from(document.querySelectorAll('[data-git-ref-chip="true"]')).map(
+      (chip) => chip.textContent,
+    );
+    expect(labels.join(" ")).not.toContain("HEAD");
+    expect(labels).toHaveLength(4);
+    expect(document.body.textContent).not.toMatch(/\+\d+\s*(more|refs|others)/i);
+    await screen.unmount();
+  });
+
   it("draws every lane a wide row carries, with no cap", async () => {
     // Forty parents are all loaded, so each really needs a lane. The row draws all forty
     // columns: no clipping and no "simplified" banner.

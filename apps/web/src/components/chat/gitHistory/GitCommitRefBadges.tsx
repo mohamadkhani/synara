@@ -20,11 +20,60 @@ const REF_KIND_PRIORITY: Record<GitHistoryCommit["refs"][number]["kind"], number
   remote: 3,
 };
 
-/** Head and branch first so the most useful labels survive the visible cap. */
-function orderRefsForDisplay(commit: GitHistoryCommit) {
-  return commit.refs.toSorted(
-    (left, right) => REF_KIND_PRIORITY[left.kind] - REF_KIND_PRIORITY[right.kind],
-  );
+/** The default branch's short name: the one ref every reader expects to see first. */
+const DEFAULT_BRANCH_NAMES = new Set(["main", "master"]);
+
+/**
+ * The remote a remote ref belongs to, or null when it names no configured remote. Mirrors
+ * `dedupeRemoteRefs`, which drops the remote name from a label the same way.
+ */
+function remoteOf(ref: GitHistoryCommit["refs"][number], remoteNames: readonly string[]) {
+  if (ref.kind !== "remote") return null;
+  return remoteNames.find((name) => ref.name.startsWith(`${name}/`)) ?? null;
+}
+
+/**
+ * The branch's own name with the `origin/` prefix (and a leading `feature/`-style directory
+ * kept) intact, used only to rank a ref.
+ */
+function shortRefName(ref: GitHistoryCommit["refs"][number], remoteNames: readonly string[]) {
+  const remote = remoteOf(ref, remoteNames);
+  return remote ? ref.name.slice(remote.length + 1) : ref.name;
+}
+
+/** `origin/HEAD` points at the remote's default branch; it is not a branch of its own. */
+function isRemoteHead(ref: GitHistoryCommit["refs"][number], remoteNames: readonly string[]) {
+  const remote = remoteOf(ref, remoteNames);
+  return remote !== null && ref.name === `${remote}/HEAD`;
+}
+
+/**
+ * Ranks refs so the ones a reader looks for survive the row's two-chip cap: the checked-out
+ * branch, HEAD, the default branch (`main`/`master`, local or remote), other local branches,
+ * tags, then the remaining remote branches by name.
+ *
+ * Without the default-branch rank a shared tip listed `origin/main` below its sibling
+ * remote branches and it was never actually shown.
+ */
+export function orderRefsForDisplay(
+  commit: GitHistoryCommit,
+  remoteNames: readonly string[],
+): GitHistoryCommit["refs"] {
+  const rank = (ref: GitHistoryCommit["refs"][number]) => {
+    if (ref.kind === "branch" && ref.checkedOut) return 0;
+    if (ref.kind === "head") return 1;
+    if (DEFAULT_BRANCH_NAMES.has(shortRefName(ref, remoteNames))) return 2;
+    return 10 + REF_KIND_PRIORITY[ref.kind];
+  };
+  const refs = commit.refs
+    .filter((ref) => !isRemoteHead(ref, remoteNames))
+    .toSorted(
+      (left, right) =>
+        rank(left) - rank(right) ||
+        REF_KIND_PRIORITY[left.kind] - REF_KIND_PRIORITY[right.kind] ||
+        left.name.localeCompare(right.name),
+    );
+  return refs;
 }
 
 export function GitCommitRefBadges(props: {
@@ -50,12 +99,13 @@ export function GitCommitRefBadges(props: {
   // The parser records `checkedOut`, so this never depends on decoration order.
   const checkedOutBranch = commit.refs.find((ref) => ref.kind === "branch" && ref.checkedOut);
   const ordered = dedupeRemoteRefs(
-    orderRefsForDisplay(commit).filter(
+    orderRefsForDisplay(commit, props.remoteNames ?? []).filter(
       (ref) => !(ref.kind === "head" && checkedOutBranch !== undefined),
     ),
     props.remoteNames ?? [],
   );
   const visible = ordered.slice(0, maxVisible);
+  const overflowCount = Math.max(0, ordered.length - maxVisible);
 
   return (
     <span className={cn("flex shrink-0 items-center gap-1", props.className)}>
@@ -122,7 +172,7 @@ export function GitCommitRefBadges(props: {
           </span>
         );
       })}
-      {ordered.length > maxVisible ? (
+      {overflowCount > 0 ? (
         <span
           className="shrink-0 text-ui-xs text-muted-foreground"
           title={ordered
@@ -130,7 +180,7 @@ export function GitCommitRefBadges(props: {
             .map((ref) => (ref.kind === "head" ? t("git:historyHeadBadge") : ref.name))
             .join("\n")}
         >
-          {t("git:historyMoreRefs", { value0: ordered.length - maxVisible })}
+          {t("git:historyMoreRefs", { value0: overflowCount })}
         </span>
       ) : null}
     </span>

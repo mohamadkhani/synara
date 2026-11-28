@@ -21,7 +21,9 @@ describe("computeDefaultBranchSelection", () => {
     ).toEqual(["main", "origin/main"]);
   });
 
-  it("falls back to the current branch when it has no upstream", () => {
+  it("keeps the default branch alongside a current branch that has no upstream", () => {
+    // A reader on a topic branch still expects `main` in the walk: the default branch is
+    // added after the current branch and survives the budget.
     expect(
       computeDefaultBranchSelection({
         candidates,
@@ -29,7 +31,7 @@ describe("computeDefaultBranchSelection", () => {
         upstreamBranch: null,
         defaultBranch: "main",
       }),
-    ).toEqual(["feature/a"]);
+    ).toEqual(["feature/a", "main", "origin/main"]);
   });
 
   it("falls back to the default branch on a detached HEAD", () => {
@@ -40,7 +42,7 @@ describe("computeDefaultBranchSelection", () => {
         upstreamBranch: null,
         defaultBranch: "main",
       }),
-    ).toEqual(["main"]);
+    ).toEqual(["main", "origin/main"]);
   });
 
   it("drops branches that are not candidates and stays within the budget", () => {
@@ -61,7 +63,7 @@ describe("computeDefaultBranchSelection", () => {
         upstreamBranch: "origin/main",
         defaultBranch: null,
       }),
-    ).toEqual(["origin/main"]);
+    ).toEqual(["origin/main", "main"]);
   });
 });
 
