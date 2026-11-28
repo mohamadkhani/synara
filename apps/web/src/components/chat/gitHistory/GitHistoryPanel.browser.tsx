@@ -79,6 +79,8 @@ vi.mock("../../ui/toast", () => ({ toastManager: { add: harness.toastAdd } }));
 import { GitHistoryPanel } from "./GitHistoryPanel";
 import { GIT_HISTORY_SELECTION_STORAGE_KEY } from "./gitHistorySelection";
 import { GIT_GRAPH_LANE_WIDTH, GIT_GRAPH_ROW_HEIGHT } from "./gitGraphLayout";
+import { DEFAULT_TIMESTAMP_FORMAT } from "~/appSettings";
+import { formatShortDateTimestamp } from "~/timestampFormat";
 
 const commit: GitHistoryCommit = {
   sha: "a".repeat(40),
@@ -110,6 +112,7 @@ interface BranchFixture {
   remoteName?: string;
   current?: boolean;
   isDefault?: boolean;
+  lastCommitAt?: string;
 }
 
 /** Replaces the branch list the panel reads, before it mounts. */
@@ -122,6 +125,7 @@ function setBranches(branches: BranchFixture[]) {
       current: entry.current === true,
       isDefault: entry.isDefault === true,
       worktreePath: null,
+      ...(entry.lastCommitAt ? { lastCommitAt: entry.lastCommitAt } : {}),
     })),
     isRepo: true,
     hasOriginRemote: true,
@@ -539,6 +543,112 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
+  it("marks remote chips with a globe and leaves local chips plain", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    const screen = await mount();
+
+    const remoteChip = await vi.waitFor(() => {
+      const chip = document.querySelector('[data-testid="branch-chip-origin/main"]');
+      expect(chip).not.toBeNull();
+      return chip as HTMLElement;
+    });
+    const localChip = document.querySelector<HTMLElement>('[data-testid="branch-chip-main"]')!;
+    // The globe sits in the chip body, the button that narrows the graph to this branch.
+    // Central icons render as a masked, aria-hidden span, so the slot is the icon marker.
+    const remoteBody = remoteChip.querySelector("button[title='Show only this']")!;
+    const localBody = localChip.querySelector("button[title='Show only this']")!;
+    expect(remoteBody.querySelector('[data-slot="central-icon"]')).not.toBeNull();
+    expect(localBody.querySelector('[data-slot="central-icon"]')).toBeNull();
+    await screen.unmount();
+  });
+
+  it("pushes and pulls the current branch from its chip context menu", async () => {
+    harness.listBranches.mockResolvedValue({
+      branches: [
+        {
+          name: "main",
+          current: true,
+          isDefault: true,
+          worktreePath: null,
+          upstreamRemote: "origin",
+        },
+      ],
+      isRepo: true,
+      hasOriginRemote: true,
+      remoteNames: ["origin"],
+    });
+    harness.contextMenuShow.mockResolvedValue("branch-pull");
+    const screen = await mount();
+
+    await page.getByTestId("branch-chip-main").click({ button: "right" });
+
+    const ids = contextMenuIds(
+      harness.contextMenuShow.mock.calls.at(-1)![0] as readonly MenuItemLike[],
+    );
+    expect(ids.indexOf("branch-pull")).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf("branch-pull")).toBeLessThan(ids.indexOf("branch-push"));
+    expect(ids.indexOf("branch-push")).toBeLessThan(ids.indexOf("branch-show-only"));
+
+    // Same dialog the commit row's ref menu opens for the same branch and command.
+    await expect.element(page.getByText("Pull branch", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("git pull origin main")).toBeVisible();
+    await page.getByRole("button", { name: "Pull" }).click();
+
+    await vi.waitFor(() =>
+      expect(harness.pullBranch).toHaveBeenCalledWith({
+        cwd: "/repo",
+        remote: "origin",
+        branch: "main",
+        rebase: false,
+      }),
+    );
+    await screen.unmount();
+  });
+
+  it("hides pull on a chip that is not the current branch, and still runs its push", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "feature/x" },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    harness.contextMenuShow.mockResolvedValue("branch-push");
+    const screen = await mount();
+
+    await page.getByTestId("branch-chip-feature/x").click({ button: "right" });
+
+    const ids = contextMenuIds(
+      harness.contextMenuShow.mock.calls.at(-1)![0] as readonly MenuItemLike[],
+    );
+    // Pull only runs on the current branch; push opens for any local branch, as in the
+    // commit row's ref menu. The selection rows stay.
+    expect(ids).not.toContain("branch-pull");
+    expect(ids).toEqual(["branch-push", "branch-show-only", "branch-hide-rest", "branch-show-all"]);
+
+    // The row must do what it says: choosing it opens the push dialog for that branch.
+    await expect.element(page.getByText("Push branch", { exact: true })).toBeVisible();
+    await screen.unmount();
+  });
+
+  it("offers neither push nor pull on a remote chip", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "origin/main", isRemote: true, remoteName: "origin" },
+    ]);
+    harness.contextMenuShow.mockResolvedValue(undefined);
+    await mount();
+
+    await page.getByTestId("branch-chip-origin/main").click({ button: "right" });
+
+    const ids = contextMenuIds(
+      harness.contextMenuShow.mock.calls.at(-1)![0] as readonly MenuItemLike[],
+    );
+    // A remote ref is not something this checkout pushes; only the selection rows apply.
+    expect(ids).toEqual(["branch-show-only", "branch-hide-rest", "branch-show-all"]);
+  });
+
   it("drops the least relevant branch over the budget and says so on its chip", async () => {
     const added = Array.from({ length: 24 }, (_value, index) => `a${index + 1}`);
     setBranches([
@@ -779,6 +889,94 @@ describe("GitHistoryPanel", () => {
       ),
     );
     await expect.element(page.getByTestId("branch-chip-feature/x")).toBeVisible();
+    await screen.unmount();
+  });
+
+  it("filters the filter-menu rows without touching the selection or the walk", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "alpha" },
+      { name: "beta" },
+      { name: "gamma" },
+    ]);
+    const screen = await mount();
+    await vi.waitFor(() => expect(harness.listCommitHistory).toHaveBeenCalled());
+    const walksBeforeFilter = harness.listCommitHistory.mock.calls.length;
+
+    await page.getByRole("button", { name: "Filter branches" }).click();
+    const checklist = () =>
+      document.querySelector<HTMLElement>('[role="group"][aria-label="Filter branches"]')!;
+    const listedNames = () =>
+      Array.from(checklist().querySelectorAll("[data-branch-checklist-item]")).map((item) =>
+        item.getAttribute("data-branch-checklist-item"),
+      );
+    expect(listedNames()).toHaveLength(4);
+
+    // Case-insensitive substring: "ALPH" still keeps alpha.
+    await page.getByLabelText("Filter branches by name").fill("ALPH");
+    expect(listedNames()).toEqual(["alpha"]);
+    expect(checklist().querySelectorAll("[data-branch-checklist-item]").length).toBe(1);
+
+    // Filtering is local view state: the selection and the graph walk are untouched.
+    expect(harness.listCommitHistory.mock.calls.length).toBe(walksBeforeFilter);
+    const rowToggle = (name: string) =>
+      checklist().querySelector(`[data-branch-checklist-item="${name}"] button[aria-pressed]`);
+    await vi.waitFor(() => expect(rowToggle("alpha")).not.toBeNull());
+    expect(rowToggle("alpha")!.getAttribute("aria-pressed")).toBe("false");
+    // main is selected but hidden by the filter: filtering only hides rows.
+    expect(rowToggle("main")).toBeNull();
+    expect(
+      document
+        .querySelector('[data-branch-chip="main"] button[aria-pressed]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    const selectedInGraph = harness.listCommitHistory.mock.calls.at(-1)![0] as {
+      refs: readonly string[];
+    };
+    expect(selectedInGraph.refs).toContain("main");
+
+    await screen.unmount();
+  });
+
+  it("restores every filter-menu row when the search is cleared", async () => {
+    setBranches([
+      { name: "main", current: true, isDefault: true },
+      { name: "alpha" },
+      { name: "beta" },
+    ]);
+    const screen = await mount();
+
+    await page.getByRole("button", { name: "Filter branches" }).click();
+    const search = page.getByLabelText("Filter branches by name");
+    const listedNames = () =>
+      Array.from(
+        document.querySelectorAll(
+          '[role="group"][aria-label="Filter branches"] [data-branch-checklist-item]',
+        ),
+      ).map((item) => item.getAttribute("data-branch-checklist-item"));
+
+    await search.fill("beta");
+    expect(listedNames()).toEqual(["beta"]);
+
+    await search.fill("");
+    expect(listedNames()).toEqual(["main", "alpha", "beta"]);
+    await screen.unmount();
+  });
+
+  it("shows the tip date of a branch with one and nothing for a branch without one", async () => {
+    // Two days back, so the label is a calendar date in every reader's time zone.
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    setBranches([
+      { name: "main", current: true, isDefault: true, lastCommitAt: twoDaysAgo },
+      { name: "undated" },
+    ]);
+    const screen = await mount();
+
+    await page.getByRole("button", { name: "Filter branches" }).click();
+    const date = document.querySelector<HTMLElement>('[data-branch-date="main"]');
+    expect(date).not.toBeNull();
+    expect(date!.textContent).toBe(formatShortDateTimestamp(twoDaysAgo, DEFAULT_TIMESTAMP_FORMAT));
+    expect(document.querySelector('[data-branch-date="undated"]')).toBeNull();
     await screen.unmount();
   });
 

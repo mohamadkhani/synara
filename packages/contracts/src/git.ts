@@ -69,6 +69,11 @@ export const GitBranch = Schema.Struct({
   current: Schema.Boolean,
   isDefault: Schema.Boolean,
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  /**
+   * ISO-8601 committer date of the branch tip's commit. Omitted when unknown, and a branch
+   * without any commit has none. Display only, for the history pane.
+   */
+  lastCommitAt: Schema.optional(Schema.String),
 });
 export type GitBranch = typeof GitBranch.Type;
 

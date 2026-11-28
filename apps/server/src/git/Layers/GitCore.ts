@@ -1632,14 +1632,19 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
       });
 
-    const readBranchRecency = (cwd: string): Effect.Effect<Map<string, number>, GitCommandError> =>
+    const readBranchRecencyAndDates = (
+      cwd: string,
+    ): Effect.Effect<
+      { recency: Map<string, number>; dates: Map<string, string> },
+      GitCommandError
+    > =>
       Effect.gen(function* () {
         const branchRecency = yield* executeGit(
           "GitCore.readBranchRecency",
           cwd,
           [
             "for-each-ref",
-            "--format=%(refname:short)%09%(committerdate:unix)",
+            "--format=%(refname:short)%09%(committerdate:unix)%09%(committerdate:iso-strict)",
             "refs/heads",
             "refs/remotes",
           ],
@@ -1650,23 +1655,29 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         );
 
         const branchLastCommit = new Map<string, number>();
+        const branchLastCommitAt = new Map<string, string>();
         if (branchRecency.code !== 0) {
-          return branchLastCommit;
+          return { recency: branchLastCommit, dates: branchLastCommitAt };
         }
 
         for (const line of branchRecency.stdout.split("\n")) {
           if (line.length === 0) {
             continue;
           }
-          const [name, lastCommitRaw] = line.split("\t");
+          const [name, lastCommitRaw, lastCommitAtRaw] = line.split("\t");
           if (!name) {
             continue;
           }
           const lastCommit = Number.parseInt(lastCommitRaw ?? "0", 10);
           branchLastCommit.set(name, Number.isFinite(lastCommit) ? lastCommit : 0);
+          // Ref names cannot contain tabs, but a trailing empty column still needs trimming.
+          const lastCommitAt = lastCommitAtRaw?.trim();
+          if (lastCommitAt && lastCommitAt.length > 0) {
+            branchLastCommitAt.set(name, lastCommitAt);
+          }
         }
 
-        return branchLastCommit;
+        return { recency: branchLastCommit, dates: branchLastCommitAt };
       });
 
     /** Local branch name → the remote its configured upstream tracks, when any. */
@@ -3294,8 +3305,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const listBranches: GitCoreShape["listBranches"] = (input) =>
       Effect.gen(function* () {
-        const branchRecencyPromise = readBranchRecency(input.cwd).pipe(
-          Effect.catch(() => Effect.succeed(new Map<string, number>())),
+        const branchRecencyPromise = readBranchRecencyAndDates(input.cwd).pipe(
+          Effect.catch(() =>
+            Effect.succeed({
+              recency: new Map<string, number>(),
+              dates: new Map<string, string>(),
+            }),
+          ),
         );
         const branchUpstreamPromise = readBranchUpstreamRemotes(input.cwd).pipe(
           Effect.catch(() => Effect.succeed(new Map<string, string>())),
@@ -3399,9 +3415,11 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           worktreeList,
           remoteBranchResult,
           remoteNamesResult,
-          branchLastCommit,
+          branchRecency,
           branchUpstreamRemotes,
         ] = branchMetadata;
+        const branchLastCommit = branchRecency.recency;
+        const branchLastCommitAt = branchRecency.dates;
 
         const remoteNames =
           remoteNamesResult.code === 0 ? parseRemoteNames(remoteNamesResult.stdout) : [];
@@ -3446,11 +3464,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             continue;
           }
           const upstreamRemote = branchUpstreamRemotes.get(branch.name);
+          const lastCommitAt = branchLastCommitAt.get(branch.name);
           unsortedLocalBranches.push({
             name: branch.name,
             current: branch.current,
             isRemote: false,
             ...(upstreamRemote ? { upstreamRemote } : {}),
+            ...(lastCommitAt ? { lastCommitAt } : {}),
             isDefault: branch.name === defaultBranch,
             worktreePath: worktreeMap.get(branch.name) ?? null,
           });
@@ -3481,6 +3501,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                     remoteName?: string;
                     isDefault: boolean;
                     worktreePath: string | null;
+                    lastCommitAt?: string;
                   } = {
                     name: branch.name,
                     current: false,
@@ -3490,6 +3511,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   };
                   if (parsedRemoteRef) {
                     remoteBranch.remoteName = parsedRemoteRef.remoteName;
+                  }
+                  const lastCommitAt = branchLastCommitAt.get(branch.name);
+                  if (lastCommitAt) {
+                    remoteBranch.lastCommitAt = lastCommitAt;
                   }
                   return remoteBranch;
                 })

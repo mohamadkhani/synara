@@ -1248,6 +1248,53 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(remoteBranch?.remoteName).toBe(remoteName);
       }),
     );
+
+    it.effect("reports lastCommitAt ISO dates for local and remote branches", () =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const tmp = yield* makeTmpDir();
+
+        yield* git(remote, ["init", "--bare"]);
+        yield* initRepoWithCommit(tmp);
+        const defaultBranch = yield* currentBranchName(tmp);
+
+        yield* git(tmp, ["remote", "add", "origin", remote]);
+        yield* (yield* GitCore).createBranch({ cwd: tmp, branch: "feature/local-only" });
+        yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "feature/local-only" });
+        yield* commitWithDate(
+          tmp,
+          "local.txt",
+          "local change\n",
+          "Thu, 1 Jan 2037 00:00:00 +0000",
+          "local change",
+        );
+
+        const remoteOnlyBranch = "feature/remote-only";
+        yield* git(tmp, ["checkout", "-b", remoteOnlyBranch]);
+        yield* commitWithDate(
+          tmp,
+          "remote.txt",
+          "remote change\n",
+          "Fri, 1 Jan 2038 00:00:00 +0000",
+          "remote change",
+        );
+        yield* git(tmp, ["push", "-u", "origin", remoteOnlyBranch]);
+        yield* git(tmp, ["checkout", defaultBranch]);
+        yield* git(tmp, ["branch", "-D", remoteOnlyBranch]);
+
+        const result = yield* (yield* GitCore).listBranches({ cwd: tmp });
+        const localBranch = result.branches.find((branch) => branch.name === "feature/local-only");
+        const remoteBranch = result.branches.find(
+          (branch) => branch.name === `origin/${remoteOnlyBranch}`,
+        );
+
+        // ISO-8601 strict form: `Z` for a UTC commit, `+05:30` for a local-tz one.
+        expect(localBranch?.lastCommitAt).toBe("2037-01-01T00:00:00Z");
+        expect(remoteBranch?.lastCommitAt).toBe("2038-01-01T00:00:00Z");
+        // Different dates prove each branch reads its own row, not one shared value.
+        expect(localBranch?.lastCommitAt).not.toBe(remoteBranch?.lastCommitAt);
+      }),
+    );
   });
 
   // ── commit history ──

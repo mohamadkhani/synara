@@ -478,6 +478,8 @@
   "historyWorktreeShowArchived": "Show archived and unused worktrees ({{value0}})",
   "historyWorktreeHideArchived": "Hide archived and unused worktrees",
   "historyBranchFilter": "Filter branches",
+  "historyBranchFilterSearch": "Filter branches by name",
+  "historyBranchFilterNoMatches": "No branches match this filter.",
   "historyBranchOnly": "Only",
   "historyBranchFilterCountShort": "{{value0}}"
 }

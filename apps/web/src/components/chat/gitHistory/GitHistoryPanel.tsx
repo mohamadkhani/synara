@@ -12,6 +12,7 @@ import type {
   ContextMenuItem,
   GitCommitRef,
   GitHistoryCommit,
+  GitListBranchesResult,
   GitStashEntry,
 } from "@synara/contracts";
 import { useAppSettings } from "~/appSettings";
@@ -78,6 +79,28 @@ type GitHistoryEntry =
   | { kind: "workingTree"; scope: "staged" | "unstaged" }
   | { kind: "stash"; stash: GitStashEntry }
   | { kind: "commit"; commit: GitHistoryCommit };
+
+/**
+ * Push target for a local branch: the branch's configured upstream remote, else origin,
+ * else the only remote. Null hides push until a remote exists to push to. Shared by the
+ * commit-row ref menu and the chip context menu so both offer push under the same rule.
+ */
+function resolvePushTarget(
+  branchList: GitBranchList | undefined,
+  branchName: string,
+): { remote: string; hasUpstream: boolean } | null {
+  const branch = branchList?.branches.find(
+    (candidate) => candidate.isRemote !== true && candidate.name === branchName,
+  );
+  if (branch?.upstreamRemote) return { remote: branch.upstreamRemote, hasUpstream: true };
+  if (branchList?.hasOriginRemote) return { remote: "origin", hasUpstream: false };
+  const remoteNames = branchList?.remoteNames ?? [];
+  if (remoteNames.length === 1) return { remote: remoteNames[0]!, hasUpstream: false };
+  return null;
+}
+
+/** The query data `resolvePushTarget` reads; named so the helper does not repeat the shape. */
+type GitBranchList = GitListBranchesResult;
 
 export function GitHistoryPanel(props: {
   /** The thread's own checkout: the worktree this task runs in. */
@@ -485,22 +508,7 @@ export function GitHistoryPanel(props: {
 
       const branchList = branchesQuery.data;
       const remoteNames = branchList?.remoteNames ?? [];
-      const hasOriginRemote = branchList?.hasOriginRemote ?? false;
-      // Push target: the branch's configured upstream remote, else origin, else the
-      // only remote. Null hides push until a remote exists to push to.
-      const resolveLocalRemote = (
-        branchName: string,
-      ): { remote: string; hasUpstream: boolean } | null => {
-        const branch = branchList?.branches.find(
-          (candidate) => candidate.isRemote !== true && candidate.name === branchName,
-        );
-        if (branch?.upstreamRemote) {
-          return { remote: branch.upstreamRemote, hasUpstream: true };
-        }
-        if (hasOriginRemote) return { remote: "origin", hasUpstream: false };
-        if (remoteNames.length === 1) return { remote: remoteNames[0]!, hasUpstream: false };
-        return null;
-      };
+      const resolveLocalRemote = (branchName: string) => resolvePushTarget(branchList, branchName);
       const remoteBranchEntry = branchList?.branches.find(
         (candidate) => candidate.isRemote === true && candidate.name === ref.name,
       );
@@ -749,6 +757,48 @@ export function GitHistoryPanel(props: {
   const hiddenBranchCount = Math.max(0, candidateNames.length - selectedBranches.length);
   const refreshing = historyQuery.isFetching && !historyQuery.isFetchingNextPage;
 
+  // A chip's push/pull open the same GitBranchActionDialog the commit-row ref menu opens,
+  // resolved with the same rules, so both surfaces show the command the server would run.
+  // The chip menu asks these per branch, so a row only appears where the action would run:
+  // push needs a resolvable remote for that branch, pull needs it to be the current branch
+  // with an upstream. Returning `null` hides the row instead of offering a no-op.
+  const resolvePushActionForChip = useCallback(
+    (branch: string): (() => void) | null => {
+      if (!viewCwd) return null;
+      // A remote ref is not something this checkout pushes. Without this guard the fallbacks
+      // in `resolvePushTarget` answer for any name and `origin/main` got a push row.
+      const known = branchesQuery.data?.branches.find((candidate) => candidate.name === branch);
+      if (!known || known.isRemote === true) return null;
+      const target = resolvePushTarget(branchesQuery.data, branch);
+      if (!target) return null;
+      return () =>
+        setBranchAction({
+          kind: "push",
+          cwd: viewCwd,
+          branch,
+          remote: target.remote,
+          hasUpstream: target.hasUpstream,
+        });
+    },
+    [branchesQuery.data, viewCwd],
+  );
+  const resolvePullActionForChip = useCallback(
+    (branch: string): (() => void) | null => {
+      if (!viewCwd || !currentBranch || branch !== currentBranch) return null;
+      const target = resolvePushTarget(branchesQuery.data, branch);
+      if (!target?.hasUpstream) return null;
+      return () =>
+        setBranchAction({
+          kind: "pull",
+          cwd: viewCwd,
+          remote: target.remote,
+          branch,
+          currentBranch,
+        });
+    },
+    [branchesQuery.data, currentBranch, viewCwd],
+  );
+
   return (
     <div className={cn("flex min-h-0 min-w-0 flex-col", props.className)}>
       <GitHistoryToolbar
@@ -771,10 +821,13 @@ export function GitHistoryPanel(props: {
         onShowOnlyBranch={branchSelection.showOnly}
         onHideRestBranches={branchSelection.hideRest}
         onShowAllBranches={branchSelection.showAll}
+        resolvePushAction={resolvePushActionForChip}
+        resolvePullAction={resolvePullActionForChip}
         canResetBranches={canResetBranches}
         onResetBranches={branchSelection.reset}
         showRemoteBranches={showRemoteBranches}
         onShowRemoteBranchesChange={setShowRemoteBranches}
+        timestampFormat={settings.timestampFormat}
         search={search}
         onSearchChange={setSearch}
         refreshing={refreshing}
