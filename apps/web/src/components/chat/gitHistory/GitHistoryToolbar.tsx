@@ -57,15 +57,17 @@ function branchChipLabel(branch: GitBranch): string {
 }
 
 /**
- * The branch on/off control, one implementation for the chip row and the filter list: a
- * hollow square with a filled square inside it. Selecting fills the inner square; the frame
- * stays hollow so the control still reads as a checkbox.
+ * The branch on/off control, one implementation for the chip row and the filter list.
  *
- * Both squares are inset box-shadows on the same element, so neither is centred by the
- * layout and neither can drift at fractional zoom (a nested centred square did).
+ * An outer frame, a hole and an inner square, all `inset` box-shadows on the same element: no
+ * part is centred by the layout, so nothing drifts at fractional zoom. Each pair is
+ * `[frame][hole]`, where the hole erases back to the surface colour, and the selected state
+ * then paints the element's whole middle, so the inner square fills up to the frame.
  */
 function BranchCheckbox(props: { selected: boolean; color: string | undefined }) {
   const color = props.color ?? "currentColor";
+  const FRAME = 1.5;
+  const HOLE = 3;
   return (
     <span
       aria-hidden="true"
@@ -74,10 +76,10 @@ function BranchCheckbox(props: { selected: boolean; color: string | undefined })
       className="size-3.5 shrink-0 rounded-[.15rem]"
       style={{
         boxShadow: props.selected
-          ? // Frame 1.5px, then a 2px gap in the surface colour, then the filled square. The
-            // gap is what keeps the control readable as a checkbox rather than a solid block.
-            `inset 0 0 0 1.5px ${color}, inset 0 0 0 3.5px var(--color-background), inset 0 0 0 5px ${color}`
-          : "inset 0 0 0 1.5px var(--color-border)",
+          ? // Outermost first: frame, then the hole that erases between frame and fill, then
+            // the fill itself.
+            `inset 0 0 0 ${FRAME}px ${color}, inset 0 0 0 ${HOLE}px var(--color-background), inset 0 0 0 999px ${color}`
+          : `inset 0 0 0 ${FRAME}px var(--color-border)`,
       }}
     />
   );
