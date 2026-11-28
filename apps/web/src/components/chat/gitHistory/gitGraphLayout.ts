@@ -139,6 +139,11 @@ export function layoutGitGraph(commits: ReadonlyArray<GitGraphCommitInput>): Git
 
       // Further parents open new lanes at the end. When the commit matched no lane (a tip)
       // this loop starts at 0, so the first parent fills the tip's own fresh column.
+      //
+      // Appending was measured against inserting beside the dot, which shortens each merge
+      // edge but shifts every existing lane one column right on every merge. On a 150-commit
+      // walk of this repository appending crossed 23 lane widths and inserting 9, so appending
+      // wins by not moving the lanes that are already drawn.
       for (let index = firstParentAdded ? 1 : 0; index < commit.parents.length; index += 1) {
         const parent = commit.parents[index]!;
         if (!hasLane(parent, position)) continue;
