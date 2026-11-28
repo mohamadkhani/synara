@@ -739,17 +739,9 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
-  it("keeps the chip bar on one row when the branches fit, and two when they do not", async () => {
-    setBranches([
-      { name: "main", current: true, isDefault: true },
-      { name: "feature/x" },
-      { name: "origin/main", isRemote: true, remoteName: "origin" },
-    ]);
-    const screen = await mount();
-    await expect.element(page.getByTestId("branch-chip-feature/x")).toBeVisible();
-    expect(document.querySelectorAll("[data-chip-row]").length).toBe(1);
-    await screen.unmount();
-
+  it("never scrolls the chip row sideways, and lists every branch in the filter menu", async () => {
+    // 26 branches: far more than a chip row can hold. The row stays one line with no
+    // horizontal scroll; the filter menu is the vertical, scrolling list of all of them.
     setBranches([
       { name: "main", current: true, isDefault: true },
       ...Array.from({ length: 24 }, (_value, index) => ({
@@ -757,10 +749,35 @@ describe("GitHistoryPanel", () => {
       })),
       { name: "origin/main", isRemote: true, remoteName: "origin" },
     ]);
-    const wide = await mount();
-    await expect.element(page.getByTestId("branch-chip-branch-23")).toBeVisible();
-    await vi.waitFor(() => expect(document.querySelectorAll("[data-chip-row]").length).toBe(2));
-    await wide.unmount();
+    const screen = await mount();
+
+    await page.getByRole("button", { name: "Filter branches" }).click();
+    const checklist = document.querySelector('[role="group"][aria-label="Filter branches"]')!;
+    expect(checklist).not.toBeNull();
+    expect(checklist.querySelectorAll("[data-branch-checklist-item]").length).toBe(26);
+    const strip = document.querySelector<HTMLElement>("[data-chip-row]")!.parentElement!;
+    expect(getComputedStyle(strip).overflowX).not.toBe("auto");
+    expect(document.querySelectorAll("[data-chip-row]").length).toBe(1);
+    await screen.unmount();
+  });
+
+  it("toggles a branch from the filter menu with the same ring as a chip", async () => {
+    setBranches([{ name: "main", current: true, isDefault: true }, { name: "feature/x" }]);
+    const screen = await mount();
+
+    await page.getByRole("button", { name: "Filter branches" }).click();
+    const item = document.querySelector<HTMLElement>(
+      '[data-branch-checklist-item="feature/x"] button[aria-pressed]',
+    )!;
+    item.click();
+
+    await vi.waitFor(() =>
+      expect(harness.listCommitHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refs: ["feature/x", "main"] }),
+      ),
+    );
+    await expect.element(page.getByTestId("branch-chip-feature/x")).toBeVisible();
+    await screen.unmount();
   });
 
   it("shows the short remote name on the chip and the full ref on hover", async () => {

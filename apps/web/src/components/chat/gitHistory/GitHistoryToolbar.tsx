@@ -4,18 +4,18 @@
 // Layer: Git history UI
 
 import type { GitBranch } from "@synara/contracts";
-import {
-  useCallback,
-  useLayoutEffect,
-  useMemo,
-  useState,
-  type MouseEvent as ReactMouseEvent,
-} from "react";
+import { useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 
-import { DownloadIcon, GitBranchIcon, GlobeIcon, RefreshCwIcon, WorktreeIcon } from "~/lib/icons";
+import {
+  DownloadIcon,
+  FilterIcon,
+  GitBranchIcon,
+  GlobeIcon,
+  RefreshCwIcon,
+  WorktreeIcon,
+} from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useTranslation } from "~/i18n";
-import { useContainerSize } from "~/hooks/useContainerSize";
 import { readNativeApi } from "~/nativeApi";
 import { Button } from "../../ui/button";
 import { IconButton } from "../../ui/icon-button";
@@ -32,6 +32,7 @@ import {
 } from "../../ui/menu";
 import { SearchInput } from "../../ui/search-input";
 import { Toggle } from "../../ui/toggle";
+import { Popover, PopoverPopup, PopoverTrigger } from "../../ui/popover";
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
 
 export interface GitWorktreeOption {
@@ -110,40 +111,9 @@ export function GitHistoryToolbar(props: {
     );
   }, [props.candidateBranches, props.visibleBranches]);
 
-  // One row normally; a second row only when the chips do not fit on one line. The chips are
-  // measured directly (their widths do not depend on the layout) so the decision cannot
-  // oscillate between one and two rows.
-  // A callback ref (not `useRef`) so the strip element itself re-renders the toolbar: the
-  // size observer and the measurement both need the node, which arrives after the first paint.
-  const [chipStrip, setChipStrip] = useState<HTMLDivElement | null>(null);
-  const stripSize = useContainerSize(chipStrip);
-  const [chipRows, setChipRows] = useState(1);
-  useLayoutEffect(() => {
-    const strip = chipStrip;
-    const chips = strip
-      ? Array.from(strip.querySelectorAll<HTMLElement>("[data-branch-chip]"))
-      : [];
-    if (!strip || chips.length === 0) {
-      setChipRows(1);
-      return;
-    }
-    const row = strip.querySelector<HTMLElement>("[data-chip-row]");
-    const gap = Number.parseFloat(row ? getComputedStyle(row).columnGap : "0") || 0;
-    const total =
-      chips.reduce((sum, chip) => sum + chip.getBoundingClientRect().width, 0) +
-      gap * Math.max(0, chips.length - 1);
-    const available = strip.clientWidth;
-    setChipRows(available > 0 && total > available ? 2 : 1);
-  }, [chipStrip, orderedBranches, props.droppedBranch, props.selectedBranches, stripSize?.width]);
-
-  // A balanced split, filled left to right, so the promoted branches land on the first row.
-  const chipRenderedRows = useMemo(() => {
-    if (chipRows === 1) return [orderedBranches];
-    const firstRow = Math.ceil(orderedBranches.length / 2);
-    return [orderedBranches.slice(0, firstRow), orderedBranches.slice(firstRow)].filter(
-      (row) => row.length > 0,
-    );
-  }, [chipRows, orderedBranches]);
+  // The chip bar is a single row that never scrolls sideways. Whatever does not fit is
+  // reached from the filter menu, which lists every branch with the same ring.
+  const chipRenderedRows = useMemo(() => [orderedBranches], [orderedBranches]);
 
   const showBranchContextMenu = useCallback(
     async (branch: GitBranch, event: ReactMouseEvent) => {
@@ -278,13 +248,15 @@ export function GitHistoryToolbar(props: {
       </div>
 
       <div className="flex min-w-0 items-start gap-1.5">
-        <div ref={setChipStrip} className="min-w-0 flex-1 overflow-x-auto">
-          <div className="flex w-max flex-col gap-1 pr-1">
+        {/* One clipping row: chips that do not fit are cut at the edge instead of scrolling
+            sideways, and the filter menu lists the rest. */}
+        <div className="flex h-6 min-w-0 flex-1 items-center overflow-hidden [mask-image:linear-gradient(to_right,#000_calc(100%-1rem),transparent)]">
+          <div className="flex min-w-0 flex-col gap-1">
             {chipRenderedRows.map((row) => (
               <div
                 key={`chip-row-${row[0]?.name ?? "empty"}`}
                 data-chip-row=""
-                className="flex w-max items-center gap-1"
+                className="flex min-w-0 items-center gap-1"
               >
                 {row.map((branch) => {
                   const selected = selectedSet.has(branch.name);
@@ -313,13 +285,15 @@ export function GitHistoryToolbar(props: {
                         aria-label={t("git:historyBranchToggle", { value0: branch.name })}
                         title={t("git:historyBranchToggle", { value0: branch.name })}
                         onClick={() => props.onToggleBranch(branch.name)}
-                        className="grid size-5 shrink-0 cursor-pointer place-items-center rounded-full focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
+                        className="grid size-5 shrink-0 cursor-pointer place-items-center rounded-sm focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
                       >
+                        {/* A square checkbox, so the same control reads as a checkbox in the
+                            filter list and as a chip here. */}
                         <span
                           aria-hidden="true"
                           data-branch-ring=""
                           className={cn(
-                            "size-3.5 shrink-0 rounded-full border-2",
+                            "size-3.5 shrink-0 rounded-[.2rem] border-2",
                             selected ? "" : "border-border",
                           )}
                           style={
@@ -373,6 +347,115 @@ export function GitHistoryToolbar(props: {
           <GitBranchIcon className="size-3.5" />
           <span>{t("git:historyRemoteChip")}</span>
         </Toggle>
+        <Popover>
+          <PopoverTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className="shrink-0 gap-1.5 px-2 text-ui-xs"
+                aria-label={t("git:historyBranchFilter")}
+                title={t("git:historyBranchFilter")}
+              >
+                <FilterIcon className="size-3.5" />
+                <span className="tabular-nums">
+                  {t("git:historyBranchFilterCountShort", {
+                    value0: props.selectedBranches.length,
+                  })}
+                </span>
+              </Button>
+            }
+          />
+          {/* Opaque: the shared popup surface paints its fill from unlayered CSS
+              (`.app-popup-surface`), which outranks a plain utility, so the fill needs `!`.
+              Otherwise the commit rows show through the checklist. */}
+          <PopoverPopup
+            align="end"
+            side="bottom"
+            className="w-72 min-w-72 border border-border ![background:var(--popover)] p-0 [&_[data-slot=popover-viewport]]:py-0 [&_[data-slot=popover-viewport]]:[--viewport-inline-padding:0px]"
+          >
+            <div className="flex min-w-0 items-center gap-2 border-b border-border/60 px-2.5 py-1.5 whitespace-nowrap">
+              <span className="shrink-0 text-ui-xs font-medium text-foreground">
+                {t("git:historyBranchFilter")}
+              </span>
+              <span className="ml-auto shrink-0 text-ui-2xs text-muted-foreground tabular-nums">
+                {t("git:historyBranchSelectionCount", {
+                  value0: props.selectedBranches.length,
+                  value1: props.branchBudget,
+                })}
+              </span>
+            </div>
+            {/* A vertical checklist with its own scroll: the chip row above never scrolls. */}
+            <div
+              role="group"
+              aria-label={t("git:historyBranchFilter")}
+              className="max-h-72 overflow-y-auto overscroll-contain p-1"
+            >
+              {orderedBranches.map((branch) => {
+                const selected = selectedSet.has(branch.name);
+                const color = props.branchColors.get(branch.name);
+                return (
+                  <div
+                    key={`${branch.isRemote === true ? "r" : "l"}:${branch.name}`}
+                    data-branch-checklist-item={branch.name}
+                    className="flex items-center gap-1 rounded-sm pr-1 hover:bg-[var(--color-background-button-secondary-hover)]"
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={selected}
+                      aria-label={t("git:historyBranchToggle", { value0: branch.name })}
+                      onClick={() => props.onToggleBranch(branch.name)}
+                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-sm px-1.5 py-1 text-left text-ui-xs focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
+                    >
+                      <span
+                        aria-hidden="true"
+                        data-branch-ring=""
+                        className={cn(
+                          "grid size-3.5 shrink-0 place-items-center rounded-[.2rem] border-2",
+                          selected ? "" : "border-border",
+                        )}
+                        style={
+                          selected
+                            ? {
+                                borderColor: color ?? "currentColor",
+                                backgroundImage: `radial-gradient(closest-square, ${color ?? "currentColor"} 0 50%, transparent 51%)`,
+                              }
+                            : undefined
+                        }
+                      />
+                      <span
+                        className={cn(
+                          "min-w-0 truncate",
+                          selected ? "text-foreground" : "text-muted-foreground",
+                        )}
+                      >
+                        {branchChipLabel(branch)}
+                      </span>
+                      {branch.isRemote === true ? (
+                        <GlobeIcon aria-hidden="true" className="size-3 shrink-0 opacity-70" />
+                      ) : null}
+                      {props.droppedBranch === branch.name ? (
+                        <span className="shrink-0 text-ui-2xs text-muted-foreground">
+                          {t("git:historyBranchDroppedChip", { value0: props.branchBudget })}
+                        </span>
+                      ) : null}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => props.onShowOnlyBranch(branch.name)}
+                      title={t("git:historyBranchShowOnly")}
+                      aria-label={t("git:historyBranchShowOnly")}
+                      className="shrink-0 cursor-pointer rounded-sm px-1 text-ui-2xs text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
+                    >
+                      {t("git:historyBranchOnly")}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </PopoverPopup>
+        </Popover>
       </div>
 
       <div className="flex min-w-0 items-center justify-between gap-1.5">
