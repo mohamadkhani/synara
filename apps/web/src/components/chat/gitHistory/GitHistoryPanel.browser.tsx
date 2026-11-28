@@ -705,12 +705,13 @@ describe("GitHistoryPanel", () => {
     await screen.unmount();
   });
 
-  it("moves the branches visible in the graph to the head of the chip bar", async () => {
+  it("keeps the chip order stable while the graph scrolls", async () => {
+    // Reordering chips by what is on screen was tried and dropped: the bar moved under the
+    // pointer while scrolling. The candidate order is what the reader learns.
     setBranches([
       { name: "main", current: true, isDefault: true },
       { name: "a1" },
       { name: "zzz" },
-      { name: "origin/main", isRemote: true, remoteName: "origin" },
     ]);
     const commits = Array.from({ length: 40 }, (_value, index) => ({
       ...commit,
@@ -728,14 +729,13 @@ describe("GitHistoryPanel", () => {
     harness.listCommitHistory.mockResolvedValue({ commits, hasMore: false });
     const screen = await mount();
 
-    // Only the top row of the graph is on screen, so only zzz is promoted.
-    await vi.waitFor(() => expect(headChipName()).toBe("zzz"));
+    await vi.waitFor(() => expect(headChipName()).toBe("main"));
 
-    // Scrolling to the far end promotes a1 and drops zzz back into candidate order.
     const scroller = document.querySelector<HTMLElement>("[data-git-history-scroll]")!;
-    scroller.scrollTop = 30 * GIT_GRAPH_ROW_HEIGHT;
+    scroller.scrollTop = scroller.scrollHeight;
     scroller.dispatchEvent(new Event("scroll"));
-    await vi.waitFor(() => expect(headChipName()).toBe("a1"));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(headChipName()).toBe("main");
     await screen.unmount();
   });
 

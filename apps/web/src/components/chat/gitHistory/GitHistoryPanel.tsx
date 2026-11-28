@@ -444,35 +444,6 @@ export function GitHistoryPanel(props: {
     initialRect: { height: 320, width: 0 },
   });
 
-  // The chip bar keeps the branches whose tip is in the graph's viewport at its head. The
-  // window is the rows at the current scroll offset; a minimum of eight rows keeps the
-  // promotion useful in a short pane. What the graph walks is unchanged: this only reorders
-  // chips, so nothing refetches and the width does not grow.
-  const scrollOffset = virtualizer.scrollOffset ?? 0;
-  const visibleRowCount = Math.max(
-    8,
-    Math.ceil((virtualizer.scrollRect?.height ?? 0) / GIT_GRAPH_ROW_HEIGHT),
-  );
-  const firstVisibleRow = Math.floor(scrollOffset / GIT_GRAPH_ROW_HEIGHT);
-  const visibleBranchKey = useMemo(() => {
-    const names: string[] = [];
-    for (let index = firstVisibleRow; index < firstVisibleRow + visibleRowCount; index += 1) {
-      const entry = entries[index];
-      if (!entry || entry.kind !== "commit") continue;
-      for (const ref of entry.commit.refs) {
-        if (ref.kind !== "branch" && ref.kind !== "remote") continue;
-        if (!names.includes(ref.name)) names.push(ref.name);
-      }
-    }
-    return names.join("\u0000");
-  }, [entries, firstVisibleRow, visibleRowCount]);
-  // NUL is not valid in a ref name, so the join/split round-trips exactly. Keying the array
-  // on the joined string keeps its identity stable while the visible set is unchanged.
-  const visibleBranches = useMemo(
-    () => (visibleBranchKey ? visibleBranchKey.split("\u0000") : []),
-    [visibleBranchKey],
-  );
-
   const selectedCommit = selectedSha
     ? (commits.find((commit) => commit.sha === selectedSha) ?? null)
     : null;
@@ -800,7 +771,6 @@ export function GitHistoryPanel(props: {
         onShowOnlyBranch={branchSelection.showOnly}
         onHideRestBranches={branchSelection.hideRest}
         onShowAllBranches={branchSelection.showAll}
-        visibleBranches={visibleBranches}
         canResetBranches={canResetBranches}
         onResetBranches={branchSelection.reset}
         showRemoteBranches={showRemoteBranches}
